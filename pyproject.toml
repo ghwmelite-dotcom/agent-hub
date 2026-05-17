@@ -24,6 +24,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["agent_hub"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: integration tests (slower)",
+    "smoke: tier-3 end-to-end smoke (requires RUN_SMOKE_TESTS=1)",
+]
+
 [tool.ruff]
 line-length = 100
 target-version = "py311"

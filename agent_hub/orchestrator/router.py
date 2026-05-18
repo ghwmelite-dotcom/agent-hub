@@ -71,6 +71,36 @@ def parse_addressee(
     )
 
 
+async def classify_freeform_message(
+    *, chat_id: int, text: str, db_path: Path,
+) -> dict:
+    """Inspect chat state and decide how to interpret a free-form message.
+
+    Returns a dict with `kind`:
+    - `pending_gate` + `task_id`: the chat has a task with a pending gate;
+       the bot should hint the user to use /approve or /reject.
+    - `default`: route to PM (or sticky agent if any).
+    """
+    import aiosqlite
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        cur = await conn.execute(
+            """
+            SELECT g.task_id
+            FROM gates g
+            JOIN tasks t ON t.id = g.task_id
+            WHERE t.origin_chat_id = ?
+              AND g.resolved_at IS NULL
+            ORDER BY g.requested_at DESC LIMIT 1
+            """,
+            (chat_id,),
+        )
+        row = await cur.fetchone()
+    if row is not None:
+        return {"kind": "pending_gate", "task_id": row["task_id"]}
+    return {"kind": "default"}
+
+
 class Orchestrator:
     """Glues the bot to the agent runner and persists conversations."""
 

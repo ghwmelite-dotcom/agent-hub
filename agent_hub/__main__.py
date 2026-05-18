@@ -101,7 +101,15 @@ async def _post_init(app, settings: Settings, runner: AgentRunner, db: Database,
         # First boot — seed recent list with the default workspace.
         await db.set_active_workspace(str(runner.workspace))
 
+    # Install the real Telegram surface now that the app is available.
+    from agent_hub.telegram_bot.surface_telegram import TelegramSurface
+    orchestrator.surface = TelegramSurface(app)
+
     await orchestrator.start()
+
+    # Restart-resume scan once at boot, after start so the loops are running.
+    from agent_hub.orchestrator.resume import scan_stale_tasks
+    await scan_stale_tasks(db_path=settings.database_path, surface=orchestrator.surface)
 
 
 async def _post_shutdown(app, runner: AgentRunner, orchestrator) -> None:

@@ -106,3 +106,27 @@ async def test_tasks_tree(server_and_db):
     result = await tree(task_id=epic["id"])
     assert result["root"]["id"] == epic["id"]
     assert [d["id"] for d in result["descendants"]] == [leaf["id"]]
+
+
+@pytest.mark.asyncio
+async def test_tasks_list_invalid_status_returns_error(server_and_db):
+    server, _ = server_and_db
+    lst = _tool(server, "tasks.list")
+    result = await lst(status="garbage")
+    assert isinstance(result, dict) and "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tasks_create_unknown_parent_returns_error(server_and_db):
+    server, _ = server_and_db
+    create = _tool(server, "tasks.create")
+    result = await create(title="x", description="-", origin_chat_id=1, parent_id=99999)
+    assert isinstance(result, dict) and "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tasks_comment_unknown_task_returns_error(server_and_db):
+    server, _ = server_and_db
+    comment = _tool(server, "tasks.comment")
+    result = await comment(task_id=99999, body="hi")
+    assert isinstance(result, dict) and "error" in result

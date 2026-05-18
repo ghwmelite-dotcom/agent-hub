@@ -45,3 +45,11 @@ async def test_handoff_to_self_returns_error(server_and_queue):
     t = await create(title="x", description="-", origin_chat_id=1)
     result = await handoff(to_agent="pm", task_id=t["id"], message="me", from_agent="pm")
     assert "error" in result
+
+
+@pytest.mark.asyncio
+async def test_handoff_unknown_task_returns_error(server_and_queue):
+    server, _ = server_and_queue
+    handoff = _tool(server, "handoff")
+    result = await handoff(to_agent="architect", task_id=99999, message="m", from_agent="pm")
+    assert isinstance(result, dict) and "error" in result

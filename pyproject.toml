@@ -5,6 +5,7 @@ description = "A team of Claude agents you manage over Telegram."
 requires-python = ">=3.11"
 dependencies = [
     "claude-agent-sdk>=0.1.0",
+    "mcp>=1.27.0",
     "python-telegram-bot[job-queue]>=21.6",
     "aiosqlite>=0.20.0",
     "python-dotenv>=1.0.1",

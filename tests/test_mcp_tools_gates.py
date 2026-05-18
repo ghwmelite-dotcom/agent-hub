@@ -42,3 +42,11 @@ async def test_gate_status_none_when_no_gate(server_and_gates):
     t = await create(title="x", description="-", origin_chat_id=1)
     s = await gate_status(task_id=t["id"], kind="design")
     assert s["status"] == "none"
+
+
+@pytest.mark.asyncio
+async def test_gate_request_unknown_task_returns_error(server_and_gates):
+    server, _ = server_and_gates
+    gate_request = _tool(server, "gate.request")
+    result = await gate_request(task_id=99999, kind="design")
+    assert isinstance(result, dict) and "error" in result

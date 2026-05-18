@@ -13,6 +13,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from agent_hub.mcp_server.tools._safe import safe_tool
 from agent_hub.tasks.gates import GateRepository
 
 
@@ -20,6 +21,7 @@ def register(server: FastMCP, db_path: Path) -> None:
     gates = GateRepository(db_path)
 
     @server.tool(name="gate.request")
+    @safe_tool
     async def gate_request(
         task_id: int,
         kind: str = "design",
@@ -36,6 +38,7 @@ def register(server: FastMCP, db_path: Path) -> None:
         return {"gate_id": gid}
 
     @server.tool(name="gate.status")
+    @safe_tool
     async def gate_status(task_id: int, kind: str = "design") -> dict:
         """Returns {'status': 'pending'|'approved'|'rejected'|'none'}."""
         s = await gates.status(task_id=task_id, kind=kind)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from agent_hub.mcp_server.tools._safe import safe_tool
 from agent_hub.state_machine import InvalidTransition, TaskStatus
 from agent_hub.tasks.repository import TaskRepository
 
@@ -46,6 +47,7 @@ def register(server: FastMCP, db_path: Path) -> None:
     repo = TaskRepository(db_path)
 
     @server.tool(name="tasks.create")
+    @safe_tool
     async def tasks_create(
         title: str,
         description: str,
@@ -61,6 +63,7 @@ def register(server: FastMCP, db_path: Path) -> None:
         return _task_to_dict(t)
 
     @server.tool(name="tasks.get")
+    @safe_tool
     async def tasks_get(task_id: int) -> dict:
         """Returns the task and its 20 most recent events. {"error": ...} if unknown."""
         t = await repo.get(task_id)
@@ -70,6 +73,7 @@ def register(server: FastMCP, db_path: Path) -> None:
         return {"task": _task_to_dict(t), "recent_events": [_event_to_dict(e) for e in events]}
 
     @server.tool(name="tasks.list")
+    @safe_tool
     async def tasks_list(
         status: str | None = None,
         owner: str | None = None,
@@ -81,6 +85,7 @@ def register(server: FastMCP, db_path: Path) -> None:
         return [_task_to_dict(t) for t in tasks]
 
     @server.tool(name="tasks.tree")
+    @safe_tool
     async def tasks_tree(task_id: int) -> dict:
         """Returns root + all descendants. {"error": ...} if root unknown."""
         result = await repo.tree(task_id)
@@ -92,6 +97,7 @@ def register(server: FastMCP, db_path: Path) -> None:
         }
 
     @server.tool(name="tasks.update")
+    @safe_tool
     async def tasks_update(
         task_id: int,
         status: str | None = None,
@@ -100,22 +106,20 @@ def register(server: FastMCP, db_path: Path) -> None:
         branch_name: str | None = None,
     ) -> dict:
         """Update task fields. Status changes validated against the transition map."""
-        try:
-            status_enum = TaskStatus(status) if status else None
-            t = await repo.update(
-                task_id,
-                status=status_enum,
-                owner=owner,
-                worktree_path=worktree_path,
-                branch_name=branch_name,
-            )
-        except InvalidTransition as exc:
-            return {"error": str(exc)}
+        status_enum = TaskStatus(status) if status else None
+        t = await repo.update(
+            task_id,
+            status=status_enum,
+            owner=owner,
+            worktree_path=worktree_path,
+            branch_name=branch_name,
+        )
         if t is None:
             return {"error": f"Unknown task {task_id}"}
         return _task_to_dict(t)
 
     @server.tool(name="tasks.comment")
+    @safe_tool
     async def tasks_comment(task_id: int, body: str, actor: str = "agent") -> dict:
         """Append a comment event to the task. Returns the new event_id."""
         event_id = await repo.comment(task_id, actor=actor, body=body)

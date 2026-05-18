@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
+from agent_hub.mcp_server.tools._safe import safe_tool
 from agent_hub.tasks.handoff_queue import HandoffQueue
 
 
@@ -17,6 +18,7 @@ def register(server: FastMCP, db_path: Path) -> None:
     queue = HandoffQueue(db_path)
 
     @server.tool(name="handoff")
+    @safe_tool
     async def handoff(to_agent: str, task_id: int, message: str, from_agent: str) -> dict:
         """Enqueue a handoff to another agent. Returns the queue_id.
 

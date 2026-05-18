@@ -43,6 +43,18 @@ class Settings(BaseModel):
     database_path: Path = Path("./data/agent_hub.db")
     log_level: str = "INFO"
 
+    # Concurrency
+    handoff_worker_count: int = Field(
+        default=3,
+        ge=1,
+        description=(
+            "Number of concurrent handoff-loop workers. Each runs claim → "
+            "dispatch in its own coroutine, so multiple in-flight tasks "
+            "progress in parallel. Per-(agent, task_id) ordering is "
+            "protected by AgentRunner's client pool lock."
+        ),
+    )
+
     # Computed
     project_root: Path = _PROJECT_ROOT
 
@@ -80,6 +92,7 @@ def load_settings() -> Settings:
         pm_autonomy=os.getenv("PM_AUTONOMY", "medium"),  # type: ignore[arg-type]
         database_path=os.getenv("DATABASE_PATH", "./data/agent_hub.db"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
+        handoff_worker_count=int(os.getenv("HANDOFF_WORKER_COUNT", "3")),
     )
 
 

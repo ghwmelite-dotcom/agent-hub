@@ -102,7 +102,8 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/reject <id> <reason> — reject a design with feedback\n"
         "/cancel <id> — abort a running task\n"
         "/resume <id> — resume a stale/blocked task\n"
-        "/status — orchestrator health snapshot\n\n"
+        "/status — orchestrator health snapshot\n"
+        "/budget [amount|off] — view, set, or disable the spend cap\n\n"
         "Address an agent directly with `@name` (e.g. `@architect`, `@impl`)."
     )
 
@@ -372,6 +373,7 @@ def build_application(
     # Task-management commands (Tasks 9-13)
     # ------------------------------------------------------------------
     from agent_hub.telegram_bot.commands.approve_cmd import handle_approve
+    from agent_hub.telegram_bot.commands.budget_cmd import handle_budget
     from agent_hub.telegram_bot.commands.cancel_cmd import handle_cancel
     from agent_hub.telegram_bot.commands.reject_cmd import handle_reject
     from agent_hub.telegram_bot.commands.status_cmd import handle_status
@@ -445,6 +447,10 @@ def build_application(
         reply = await handle_status(db_path=db_path, runner=orchestrator.runner)
         await update.effective_chat.send_message(reply)
 
+    async def _on_budget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        reply = await handle_budget(args=context.args or [], db_path=db_path)
+        await update.effective_chat.send_message(reply)
+
     async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not context.args:
             await update.effective_chat.send_message("Usage: /cancel <id>")
@@ -480,6 +486,7 @@ def build_application(
     app.add_handler(CommandHandler("cancel", _on_cancel))
     app.add_handler(CommandHandler("resume", _on_resume))
     app.add_handler(CommandHandler("status", _on_status))
+    app.add_handler(CommandHandler("budget", _on_budget))
 
     # Catch-all — must come AFTER all CommandHandlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))

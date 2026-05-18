@@ -53,9 +53,26 @@ CREATE TABLE IF NOT EXISTS tasks (
     branch_name TEXT,
     origin_chat_id INTEGER NOT NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    cost_usd_total REAL NOT NULL DEFAULT 0
 );
 """
+
+
+async def _migrate_tasks_cost_total(conn: aiosqlite.Connection) -> None:
+    """Idempotent migration: ensure `tasks.cost_usd_total` exists.
+
+    Pre-existing DBs predate the budget tracking, so add the column via
+    ALTER TABLE if it isn't already there. Defaults to 0 so historical
+    rows are valid.
+    """
+    cur = await conn.execute("PRAGMA table_info(tasks)")
+    rows = await cur.fetchall()
+    existing = {r[1] for r in rows}
+    if "cost_usd_total" not in existing:
+        await conn.execute(
+            "ALTER TABLE tasks ADD COLUMN cost_usd_total REAL NOT NULL DEFAULT 0"
+        )
 
 _SCHEMA_TASK_EVENTS = """
 CREATE TABLE IF NOT EXISTS task_events (
@@ -141,6 +158,7 @@ class Database:
             await conn.executescript(_SCHEMA_GATES)
             await conn.executescript(_SCHEMA_WORKTREES)
             await _migrate_gates_notified_at(conn)
+            await _migrate_tasks_cost_total(conn)
             await conn.commit()
         log.info("db.ready", path=str(self.path))
 

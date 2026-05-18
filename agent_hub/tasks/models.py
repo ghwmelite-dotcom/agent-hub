@@ -28,6 +28,7 @@ class Task(BaseModel):
     origin_chat_id: int
     created_at: datetime
     updated_at: datetime
+    cost_usd_total: float = 0.0
 
 
 class TaskEvent(BaseModel):

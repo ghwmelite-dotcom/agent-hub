@@ -24,7 +24,7 @@ async def test_tasks_table_columns(temp_db_path):
     assert cols == {
         "id", "parent_id", "title", "description", "status", "owner",
         "worktree_path", "branch_name", "origin_chat_id",
-        "created_at", "updated_at",
+        "created_at", "updated_at", "cost_usd_total",
     }
 
 
@@ -65,6 +65,37 @@ async def test_gates_columns(temp_db_path):
         "id", "task_id", "kind", "artifact_path", "summary",
         "requested_at", "resolved_at", "resolution", "notified_at",
     }
+
+
+@pytest.mark.asyncio
+async def test_tasks_cost_total_migration_idempotent(temp_db_path):
+    """A pre-existing DB without `tasks.cost_usd_total` gets it added;
+    second init() is a no-op."""
+    async with aiosqlite.connect(temp_db_path) as conn:
+        await conn.execute(
+            "CREATE TABLE tasks ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "parent_id INTEGER,"
+            "title TEXT NOT NULL,"
+            "description TEXT NOT NULL,"
+            "status TEXT NOT NULL,"
+            "owner TEXT,"
+            "worktree_path TEXT,"
+            "branch_name TEXT,"
+            "origin_chat_id INTEGER NOT NULL,"
+            "created_at TEXT NOT NULL,"
+            "updated_at TEXT NOT NULL"
+            ")"
+        )
+        await conn.commit()
+
+    await Database(temp_db_path).init()
+    async with aiosqlite.connect(temp_db_path) as conn:
+        rows = await (await conn.execute("PRAGMA table_info(tasks)")).fetchall()
+    cols = {r[1] for r in rows}
+    assert "cost_usd_total" in cols
+
+    await Database(temp_db_path).init()
 
 
 @pytest.mark.asyncio

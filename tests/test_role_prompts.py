@@ -27,6 +27,12 @@ EXPECTED_MCP_TOOLS: dict[str, list[str]] = {
         "mcp__agent_hub__tasks_update",
         "mcp__agent_hub__gate_request",
     ],
+    "quant": [
+        "mcp__agent_hub__tasks_get",
+        "mcp__agent_hub__tasks_comment",
+        "mcp__agent_hub__tasks_update",
+        "mcp__agent_hub__gate_request",
+    ],
     "fullstack-engineer": [
         "mcp__agent_hub__tasks_get",
         "mcp__agent_hub__tasks_update",

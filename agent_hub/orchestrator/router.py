@@ -10,6 +10,7 @@ Routing rules (in order):
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ import structlog
 from agent_hub.agents import AgentRegistry, AgentRunner
 from agent_hub.agents.runner import AgentEvent
 from agent_hub.db import Database
+from agent_hub.orchestrator.surface import MessageSurface
 
 log = structlog.get_logger(__name__)
 
@@ -76,14 +78,19 @@ class Orchestrator:
         registry: AgentRegistry,
         runner: AgentRunner,
         db: Database,
+        surface: MessageSurface | None = None,
         default_agent: str = "pm",
     ):
         self.registry = registry
         self.runner = runner
         self.db = db
+        self.surface = surface
         self.default_agent = default_agent
         # Per-chat sticky agent — last agent the user was talking to.
         self._sticky: dict[int, str] = {}
+        self._stop_event = asyncio.Event()
+        self._tasks: list[asyncio.Task] = []
+        self._started = False
 
     def sticky_for(self, chat_id: int) -> str | None:
         return self._sticky.get(chat_id)
@@ -144,3 +151,29 @@ class Orchestrator:
                 content="".join(accumulated),
                 metadata={"chat_id": chat_id},
             )
+
+    async def start(self) -> None:
+        """Start the background loops. Raises if called twice."""
+        if self._started:
+            raise RuntimeError("Orchestrator.start() called twice")
+        self._started = True
+        self._stop_event.clear()
+        # Background loops land in later tasks (5, 8). For now this is a
+        # stub that creates no tasks but flips the flag so stop() works.
+
+    async def stop(self) -> None:
+        """Signal all background loops to exit and wait for them."""
+        if not self._started:
+            return
+        self._stop_event.set()
+        for task in self._tasks:
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.TimeoutError:
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+        self._tasks.clear()
+        self._started = False

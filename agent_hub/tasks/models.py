@@ -31,6 +31,15 @@ class Task(BaseModel):
 
 
 class TaskEvent(BaseModel):
+    """Event row from task_events table.
+
+    Note: the DB column is ``payload_json TEXT NOT NULL`` storing a JSON
+    string; the model's ``payload`` field is the deserialized dict. The
+    repository is responsible for ``json.loads`` on read and
+    ``json.dumps`` on write — do NOT construct ``TaskEvent`` directly
+    from a raw row dict.
+    """
+
     id: int
     task_id: int
     ts: datetime

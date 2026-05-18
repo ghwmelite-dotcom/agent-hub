@@ -114,3 +114,41 @@ async def test_path_returns_recorded_path(manager_deps):
 async def test_path_returns_none_for_unknown_task(manager_deps):
     manager, _, _ = manager_deps
     assert await manager.path(99999) is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_removes_worktree_and_marks_db(manager_deps):
+    manager, repo, _ = manager_deps
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    created = await manager.create(task_id=task.id, title=task.title)
+    assert Path(created["path"]).exists()
+
+    await manager.cleanup(task.id)
+
+    assert not Path(created["path"]).exists()
+    from agent_hub.tasks.worktree_repo import WorktreeRepository
+    wt_repo = WorktreeRepository(manager.db_path)
+    row = await wt_repo.get_by_task(task.id)
+    assert row.cleaned_at is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_refuses_dirty_worktree(manager_deps):
+    manager, repo, _ = manager_deps
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    created = await manager.create(task_id=task.id, title=task.title)
+    # Make the worktree dirty.
+    (Path(created["path"]) / "dirt.txt").write_text("uncommitted\n")
+
+    with pytest.raises(RuntimeError) as exc:
+        await manager.cleanup(task.id)
+    assert "uncommitted" in str(exc.value).lower() or "dirty" in str(exc.value).lower()
+    # Worktree must still exist after refused cleanup.
+    assert Path(created["path"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_unknown_task_is_noop(manager_deps):
+    manager, _, _ = manager_deps
+    # Should not raise; no worktree to clean.
+    await manager.cleanup(99999)

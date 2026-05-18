@@ -78,3 +78,36 @@ class WorktreeManager:
         """Return the recorded worktree path for task_id, or None."""
         row = await self._repo.get_by_task(task_id)
         return row.path if row else None
+
+    async def cleanup(self, task_id: int) -> None:
+        """Remove the worktree from disk and mark cleaned_at.
+
+        Refuses to remove a dirty worktree (uncommitted changes) — the
+        agent's work is left in place for human inspection. The DB row
+        is NOT marked cleaned in that case so the orchestrator can flag
+        the task as blocked.
+        """
+        row = await self._repo.get_by_task(task_id)
+        if row is None or row.cleaned_at is not None:
+            return  # nothing to do
+
+        # Check for uncommitted changes inside the worktree.
+        proc = await asyncio.create_subprocess_exec(
+            "git", "status", "--porcelain",
+            cwd=row.path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_b, _ = await proc.communicate()
+        if stdout_b.strip():
+            raise RuntimeError(
+                f"Worktree {row.path} has uncommitted changes; refusing to remove. "
+                f"Resolve manually or commit first."
+            )
+
+        rc, stdout, stderr = await self._run_git("worktree", "remove", row.path)
+        if rc != 0:
+            raise RuntimeError(
+                f"git worktree remove failed (rc={rc}): {stderr.strip() or stdout.strip()}"
+            )
+        await self._repo.mark_cleaned(task_id)

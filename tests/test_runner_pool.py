@@ -1,0 +1,105 @@
+"""Tests for the per-(agent, task) client pool keying.
+
+We do NOT spin up real ClaudeSDKClients here — we monkey-patch the
+runner's internal SDK factory so we can observe how the pool is keyed
+and how cwd flows through. Real-SDK tests land in Plan 3 (FakeAgentRunner)
+and Plan 4 (Haiku smoke).
+"""
+
+from pathlib import Path
+
+import pytest
+
+from agent_hub.agents import AgentRegistry
+from agent_hub.agents.runner import AgentRunner
+from agent_hub.config import Settings
+
+
+def _settings(tmp_path: Path) -> Settings:
+    return Settings(
+        telegram_bot_token="dummy",
+        telegram_allowed_user_id=1,
+        agent_workspaces=[],
+        database_path=tmp_path / "agent_hub.db",
+    )
+
+
+class _FakeClient:
+    def __init__(self, options):
+        self.options = options
+        self.connected = False
+        self.disconnected = False
+
+    async def connect(self):
+        self.connected = True
+
+    async def disconnect(self):
+        self.disconnected = True
+
+
+@pytest.fixture
+def patched_runner(monkeypatch, tmp_path):
+    """A runner whose SDK is mocked. Returns (runner, created_clients_list)."""
+    created: list[_FakeClient] = []
+
+    def fake_client_factory(options):
+        c = _FakeClient(options)
+        created.append(c)
+        return c
+
+    # Patch the symbol the runner imports.
+    monkeypatch.setattr(
+        "agent_hub.agents.runner._client_factory", fake_client_factory, raising=False
+    )
+
+    registry = AgentRegistry.load()
+    runner = AgentRunner(settings=_settings(tmp_path), registry=registry)
+    return runner, created
+
+
+@pytest.mark.asyncio
+async def test_get_client_caches_per_agent_when_no_task_id(patched_runner):
+    runner, created = patched_runner
+    c1 = await runner._get_or_create_client("pm", task_id=None, cwd=None)
+    c2 = await runner._get_or_create_client("pm", task_id=None, cwd=None)
+    # Same call, same key → reused.
+    assert c1 is c2
+    assert len(created) == 1
+
+
+@pytest.mark.asyncio
+async def test_get_client_keys_by_task_id(patched_runner):
+    runner, created = patched_runner
+    c_task5 = await runner._get_or_create_client("pm", task_id=5, cwd=None)
+    c_task7 = await runner._get_or_create_client("pm", task_id=7, cwd=None)
+    # Different task_id → different client.
+    assert c_task5 is not c_task7
+    assert len(created) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_client_different_agents_different_clients(patched_runner):
+    runner, created = patched_runner
+    pm_client = await runner._get_or_create_client("pm", task_id=5, cwd=None)
+    arch_client = await runner._get_or_create_client("architect", task_id=5, cwd=None)
+    assert pm_client is not arch_client
+    assert len(created) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_client_passes_cwd_into_options(patched_runner, tmp_path):
+    runner, created = patched_runner
+    cwd = tmp_path / "wt" / "5"
+    cwd.mkdir(parents=True)
+    client = await runner._get_or_create_client("pm", task_id=5, cwd=cwd)
+    assert client.options.cwd == str(cwd)
+
+
+@pytest.mark.asyncio
+async def test_shutdown_disconnects_all_pool_entries(patched_runner):
+    runner, created = patched_runner
+    await runner._get_or_create_client("pm", task_id=1, cwd=None)
+    await runner._get_or_create_client("pm", task_id=2, cwd=None)
+    await runner._get_or_create_client("architect", task_id=1, cwd=None)
+    await runner.shutdown()
+    assert all(c.disconnected for c in created)

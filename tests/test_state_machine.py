@@ -57,3 +57,15 @@ def test_validate_raises_on_invalid():
 
 def test_validate_returns_none_on_valid():
     assert validate_transition(TaskStatus.READY, TaskStatus.IN_PROGRESS) is None
+
+
+def test_done_is_terminal():
+    """DONE is a terminal state — no outgoing transitions allowed."""
+    for s in TaskStatus:
+        if s is not TaskStatus.DONE:
+            assert not is_allowed(TaskStatus.DONE, s), f"DONE -> {s} should be disallowed"
+
+
+def test_pending_can_be_blocked():
+    """Regression: PENDING -> BLOCKED was missing from the original transition set."""
+    assert is_allowed(TaskStatus.PENDING, TaskStatus.BLOCKED)

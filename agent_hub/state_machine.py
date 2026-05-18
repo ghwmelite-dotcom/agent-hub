@@ -35,6 +35,7 @@ ALLOWED_TRANSITIONS: frozenset[tuple[TaskStatus | None, TaskStatus]] = frozenset
     (TaskStatus.REVIEW, TaskStatus.DONE),
     (TaskStatus.REVIEW, TaskStatus.IN_PROGRESS),    # reviewer kick-back
     # Any → blocked (enumerated)
+    (TaskStatus.PENDING, TaskStatus.BLOCKED),
     (TaskStatus.PLANNING, TaskStatus.BLOCKED),
     (TaskStatus.DESIGN_REVIEW, TaskStatus.BLOCKED),
     (TaskStatus.READY, TaskStatus.BLOCKED),

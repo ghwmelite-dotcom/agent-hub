@@ -1,9 +1,9 @@
 """Wraps the Claude Agent SDK so each role is a persistent, addressable agent.
 
-Each agent gets its own ClaudeSDKClient with a role-specific system prompt and
-tool allowlist. Conversations persist across turns within a process; the client
-is created lazily on first use and reused for every subsequent message to that
-role.
+Each agent gets its own ClaudeSDKClient keyed on (agent_name, task_id).
+Conversations persist across turns within a process; the client is created
+lazily on first use and reused for every subsequent message to that role +
+task pair.
 """
 
 from __future__ import annotations
@@ -21,17 +21,15 @@ from agent_hub.config import Settings
 
 log = structlog.get_logger(__name__)
 
-# Lazy import — the SDK is heavy and we want config errors to surface first.
-_sdk: Any = None
 
+def _client_factory(options: Any) -> Any:
+    """Default factory — constructs the real ClaudeSDKClient.
 
-def _load_sdk() -> Any:
-    global _sdk
-    if _sdk is None:
-        import claude_agent_sdk as sdk
+    Tests monkey-patch this symbol to inject a fake client.
+    """
+    import claude_agent_sdk as sdk
 
-        _sdk = sdk
-    return _sdk
+    return sdk.ClaudeSDKClient(options=options)
 
 
 @dataclass
@@ -76,12 +74,12 @@ AgentEvent = TextChunk | ToolStart | ToolEnd | TurnDone | AgentError
 
 
 class AgentRunner:
-    """One persistent Claude session per agent role."""
+    """One persistent Claude session per (agent role, task_id) pair."""
 
     def __init__(self, settings: Settings, registry: AgentRegistry):
         self.settings = settings
         self.registry = registry
-        self._clients: dict[str, Any] = {}
+        self._clients: dict[tuple[str, int | None], Any] = {}
         self._lock = asyncio.Lock()
         self._cwd: Path | None = settings.default_workspace
 
@@ -107,38 +105,51 @@ class AgentRunner:
 
     async def shutdown(self) -> None:
         async with self._lock:
-            for name, client in list(self._clients.items()):
+            for key, client in list(self._clients.items()):
                 try:
                     await client.disconnect()
                 except Exception as exc:  # noqa: BLE001
-                    log.warning("agent.shutdown_failed", agent=name, error=str(exc))
+                    log.warning("agent.shutdown_failed", key=key, error=str(exc))
             self._clients.clear()
 
-    async def reset(self, agent_name: str) -> None:
+    async def reset(self, agent_name: str, *, task_id: int | None = None) -> None:
         """Drop an agent's session — next message starts a fresh context."""
         canonical = self.registry.resolve(agent_name)
         if canonical is None:
             raise KeyError(agent_name)
         async with self._lock:
-            client = self._clients.pop(canonical, None)
+            client = self._clients.pop((canonical, task_id), None)
         if client is not None:
             try:
                 await client.disconnect()
             except Exception as exc:  # noqa: BLE001
-                log.warning("agent.reset_failed", agent=canonical, error=str(exc))
+                log.warning(
+                    "agent.reset_failed",
+                    agent=canonical,
+                    task_id=task_id,
+                    error=str(exc),
+                )
 
     # ------------------------------------------------------------------
     # Sending
     # ------------------------------------------------------------------
 
-    async def send(self, agent_name: str, message: str) -> AsyncIterator[AgentEvent]:
+    async def send(
+        self,
+        agent_name: str,
+        message: str,
+        *,
+        task_id: int | None = None,
+    ) -> AsyncIterator[AgentEvent]:
         """Send a message to an agent and stream events back.
 
         Yields TextChunk / ToolStart / ToolEnd events as the agent works, and
         finally a TurnDone (or AgentError) event when the turn ends.
         """
         role = self.registry.get(agent_name)
-        client = await self._get_client(role)
+        client = await self._get_or_create_client(
+            role.name, task_id=task_id, cwd=self._cwd
+        )
 
         try:
             await client.query(message)
@@ -159,27 +170,50 @@ class AgentRunner:
     # Internal
     # ------------------------------------------------------------------
 
-    async def _get_client(self, role: AgentRole) -> Any:
-        async with self._lock:
-            if role.name in self._clients:
-                return self._clients[role.name]
+    async def _get_or_create_client(
+        self,
+        agent_name: str,
+        *,
+        task_id: int | None,
+        cwd: Path | None,
+    ) -> Any:
+        from agent_hub.agents.runner_options import build_sdk_options
+        from agent_hub.tasks.worktree_repo import WorktreeRepository
 
-            sdk = _load_sdk()
-            options = sdk.ClaudeAgentOptions(
-                system_prompt=role.system_prompt,
-                allowed_tools=role.allowed_tools,
-                model=role.model,
-                cwd=str(self._cwd) if self._cwd else None,
+        role = self.registry.get(agent_name)
+        key = (role.name, task_id)
+        async with self._lock:
+            if key in self._clients:
+                return self._clients[key]
+
+            # Resolve effective cwd:
+            # 1. If task_id has a recorded (not-cleaned) worktree → use it.
+            # 2. Else if caller passed an explicit cwd → use it.
+            # 3. Else fall back to global workspace (self._cwd).
+            effective_cwd: Path | None = None
+            if task_id is not None:
+                wt_repo = WorktreeRepository(self.settings.database_path)
+                row = await wt_repo.get_by_task(task_id)
+                if row is not None and row.cleaned_at is None:
+                    effective_cwd = Path(row.path)
+            if effective_cwd is None and cwd is not None:
+                effective_cwd = cwd
+            if effective_cwd is None:
+                effective_cwd = self._cwd
+
+            options = build_sdk_options(
+                role, cwd=effective_cwd, db_path=self.settings.database_path,
             )
-            client = sdk.ClaudeSDKClient(options=options)
+            client = _client_factory(options)
             await client.connect()
-            self._clients[role.name] = client
+            self._clients[key] = client
             log.info(
                 "agent.started",
                 agent=role.name,
+                task_id=task_id,
                 model=role.model,
                 tools=role.allowed_tools,
-                cwd=str(self._cwd) if self._cwd else None,
+                cwd=str(effective_cwd) if effective_cwd else None,
             )
             return client
 

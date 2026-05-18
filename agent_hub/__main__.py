@@ -7,6 +7,7 @@ Telegram application, and runs the bot until Ctrl-C.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -16,7 +17,27 @@ from agent_hub.agents import AgentRegistry, AgentRunner
 from agent_hub.config import Settings, load_settings
 from agent_hub.db import Database
 from agent_hub.orchestrator import Orchestrator
+from agent_hub.orchestrator.lock import OrchestratorLock
 from agent_hub.telegram_bot import build_application
+
+
+def _resolve_lock_path(db_path: Path) -> Path:
+    return db_path.parent / ".orchestrator.lock"
+
+
+def _acquire_orchestrator_lock_or_exit(db_path: Path) -> OrchestratorLock:
+    """Acquire the per-workspace orchestrator lock. Caller is responsible
+    for releasing it on shutdown."""
+    lock_path = _resolve_lock_path(db_path)
+    lock = OrchestratorLock(lock_path)
+    lock.acquire()
+    return lock
+
+
+def _export_db_path_to_env(db_path: Path) -> None:
+    """Make the absolute DB path visible to child processes (e.g. the
+    per-agent MCP servers) that inherit our environment."""
+    os.environ["AGENT_HUB_DB"] = str(db_path)
 
 
 def _configure_logging(level: str) -> None:
@@ -80,6 +101,10 @@ def main() -> None:
         workspace=str(settings.default_workspace) if settings.default_workspace else None,
     )
 
+    # Single-instance lock — refuses to start if another agent_hub is alive.
+    lock = _acquire_orchestrator_lock_or_exit(settings.database_path)
+    _export_db_path_to_env(settings.database_path)
+
     registry = AgentRegistry.load()
     runner = AgentRunner(settings=settings, registry=registry)
     db = Database(settings.database_path)
@@ -96,9 +121,12 @@ def main() -> None:
     app.post_init = lambda a: _post_init(a, settings, runner, db)
     app.post_shutdown = lambda a: _post_shutdown(a, runner)
 
-    log.info("agent_hub.polling")
-    # run_polling owns the event loop; blocks until SIGINT/SIGTERM.
-    app.run_polling(stop_signals=None) if sys.platform == "win32" else app.run_polling()
+    try:
+        log.info("agent_hub.polling")
+        # run_polling owns the event loop; blocks until SIGINT/SIGTERM.
+        app.run_polling(stop_signals=None) if sys.platform == "win32" else app.run_polling()
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

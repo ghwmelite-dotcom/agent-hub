@@ -40,6 +40,52 @@ def _export_db_path_to_env(db_path: Path) -> None:
     os.environ["AGENT_HUB_DB"] = str(db_path)
 
 
+def _apply_auth_mode(settings: Settings, log) -> None:
+    """Decide how the Claude Agent SDK should authenticate.
+
+    Three modes:
+    - **subscription** (default): use the Claude Code CLI's cached OAuth
+      session (`claude auth login`). To guarantee no accidental API
+      billing, we scrub `ANTHROPIC_API_KEY` from `os.environ` BEFORE the
+      SDK or any subprocess sees it.
+    - **api_key**: require `ANTHROPIC_API_KEY`. Bot exits if missing.
+      Use this when you don't have a subscription and want to pay
+      per-token.
+    - **auto**: use API key if present, else fall back to subscription.
+      The historical default; preserved for users with mixed setups.
+
+    The SDK's auth precedence is: env-var API key first, then keychain/
+    OAuth. Scrubbing the env-var is the only reliable way to force
+    subscription mode without modifying the SDK.
+    """
+    mode = settings.anthropic_auth_mode
+    has_key = bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+    if mode == "subscription":
+        if has_key:
+            os.environ.pop("ANTHROPIC_API_KEY", None)
+            log.info("auth.subscription_mode_active", scrubbed_api_key=True)
+        else:
+            log.info("auth.subscription_mode_active")
+        return
+
+    if mode == "api_key":
+        if not has_key:
+            raise SystemExit(
+                "ANTHROPIC_AUTH_MODE=api_key but ANTHROPIC_API_KEY is not set. "
+                "Set it in .env, or switch to ANTHROPIC_AUTH_MODE=subscription "
+                "and run `claude auth login`."
+            )
+        log.info("auth.api_key_mode_active")
+        return
+
+    # auto
+    if has_key:
+        log.info("auth.auto_mode", picked="api_key")
+    else:
+        log.info("auth.auto_mode", picked="subscription")
+
+
 def _build_orchestrator(
     *,
     settings: Settings,
@@ -136,6 +182,8 @@ def main() -> None:
         autonomy=settings.pm_autonomy,
         workspace=str(settings.default_workspace) if settings.default_workspace else None,
     )
+
+    _apply_auth_mode(settings, log)
 
     # Single-instance lock — refuses to start if another agent_hub is alive.
     lock = _acquire_orchestrator_lock_or_exit(settings.database_path)

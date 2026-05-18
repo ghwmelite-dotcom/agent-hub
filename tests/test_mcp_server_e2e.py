@@ -32,9 +32,11 @@ async def test_e2e_create_task_via_mcp(temp_db_path):
             assert "handoff" in names
             assert "gate.request" in names
 
+            # origin_chat_id is declared as `str` on the tool so models can
+            # safely pass stringified numerics. The tool coerces to int.
             result = await session.call_tool(
                 "tasks.create",
-                {"title": "e2e", "description": "-", "origin_chat_id": 1},
+                {"title": "e2e", "description": "-", "origin_chat_id": "1"},
             )
             # FastMCP wraps the return in result.content[0].text as JSON.
             payload = json.loads(result.content[0].text)

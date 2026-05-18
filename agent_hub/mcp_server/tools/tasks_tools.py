@@ -51,14 +51,23 @@ def register(server: FastMCP, db_path: Path) -> None:
     async def tasks_create(
         title: str,
         description: str,
-        origin_chat_id: int,
-        parent_id: int | None = None,
+        origin_chat_id: str,
+        parent_id: str | None = None,
         owner: str | None = None,
     ) -> dict:
-        """Create a new task in 'pending' status. Returns the created task."""
+        """Create a new task in 'pending' status. Returns the created task.
+
+        Numeric params (origin_chat_id, parent_id) are accepted as
+        STRINGS to match how models actually pass them. The SDK's
+        schema validator is strict — declaring int rejects "12345"
+        before the request reaches the MCP server, which then makes
+        the model hallucinate "tool unavailable". We coerce inside.
+        """
+        origin_chat_id_int = int(origin_chat_id)
+        parent_id_int = int(parent_id) if parent_id is not None else None
         t = await repo.create(
-            title=title, description=description, origin_chat_id=origin_chat_id,
-            parent_id=parent_id, owner=owner,
+            title=title, description=description, origin_chat_id=origin_chat_id_int,
+            parent_id=parent_id_int, owner=owner,
         )
         return _task_to_dict(t)
 

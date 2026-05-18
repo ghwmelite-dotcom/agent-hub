@@ -125,7 +125,9 @@ class Orchestrator:
         self._stop_event = asyncio.Event()
         self._tasks: list[asyncio.Task] = []
         self._started = False
-        self._notified_gates: set[int] = set()
+        # `notified_at` is persisted on gates so restart doesn't re-DM.
+        # Set by start(); read by scan_stale_tasks to surface in the boot DM.
+        self.released_stale_claims: int = 0
 
     def sticky_for(self, chat_id: int) -> str | None:
         return self._sticky.get(chat_id)
@@ -198,11 +200,23 @@ class Orchestrator:
             )
 
     async def start(self) -> None:
-        """Start the background loops. Raises if called twice."""
+        """Start the background loops. Raises if called twice.
+
+        Releases any handoff rows claimed by a previous (now dead) process
+        before spinning up the tick loops — otherwise stuck tasks would
+        sit forever waiting for an orchestrator that no longer exists.
+        """
         if self._started:
             raise RuntimeError("Orchestrator.start() called twice")
         self._started = True
         self._stop_event.clear()
+
+        from agent_hub.tasks.handoff_queue import HandoffQueue
+        released = await HandoffQueue(self.db.path).release_stale_claims()
+        if released:
+            log.info("orchestrator.released_stale_claims", count=released)
+        self.released_stale_claims = released
+
         self._tasks.append(asyncio.create_task(self._run_handoff_loop()))
         self._tasks.append(asyncio.create_task(self._run_gate_watcher()))
 
@@ -292,36 +306,29 @@ class Orchestrator:
 
     async def _tick_gates(self) -> None:
         """Detect pending design gates and DM the user. Idempotent —
-        each gate is announced at most once per orchestrator lifetime."""
+        each gate is announced at most once *ever* (state persisted via
+        `gates.notified_at`, so restart doesn't re-DM)."""
         if self.surface is None:
             return
-        import aiosqlite
+        from agent_hub.tasks.gates import GateRepository
         from agent_hub.tasks.repository import TaskRepository
 
         repo = TaskRepository(self.db.path)
+        gates = GateRepository(self.db.path)
 
-        async with aiosqlite.connect(self.db.path) as conn:
-            conn.row_factory = aiosqlite.Row
-            cur = await conn.execute(
-                "SELECT id, task_id, kind, summary FROM gates "
-                "WHERE resolved_at IS NULL"
-            )
-            rows = await cur.fetchall()
-
-        for row in rows:
-            if row["id"] in self._notified_gates:
-                continue
-            task = await repo.get(row["task_id"])
+        unnotified = await gates.unresolved_unnotified()
+        for gate in unnotified:
+            task = await repo.get(gate.task_id)
             if task is None:
                 continue
-            summary = row["summary"] or ""
+            summary = gate.summary or ""
             msg = (
                 f"🛂 Task #{task.id} design ready"
                 + (f": {summary}" if summary else "")
                 + f"\nReply /approve {task.id} or /reject {task.id} <reason>."
             )
             await self.surface.dm(task.origin_chat_id, msg)
-            self._notified_gates.add(row["id"])
+            await gates.mark_notified(gate.id)
 
     async def _run_handoff_loop(self) -> None:
         loop_log = structlog.get_logger("agent_hub.handoff_loop")

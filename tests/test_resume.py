@@ -72,3 +72,44 @@ async def test_skips_terminal_states(deps):
 
     await scan_stale_tasks(db_path=db.path, surface=surface, stale_after_minutes=5)
     assert surface.sent == []
+
+
+@pytest.mark.asyncio
+async def test_released_claims_mentioned_in_dm(deps):
+    """When release_stale_claims found rows on boot, the user's resume DM
+    surfaces the count so they know something was recovered."""
+    repo, surface, db = deps
+    task = await repo.create(title="x", description="-", origin_chat_id=42)
+    await repo.update(task.id, status=TaskStatus.PLANNING)
+    await repo.update(task.id, status=TaskStatus.IN_PROGRESS)
+    await _backdate_last_event(db.path, task.id, minutes=10)
+
+    await scan_stale_tasks(
+        db_path=db.path,
+        surface=surface,
+        stale_after_minutes=5,
+        released_claims_count=3,
+    )
+
+    msgs = surface.dms_to(42)
+    assert any("Released 3" in m and "stuck handoffs" in m for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_released_count_zero_omits_recovery_line(deps):
+    repo, surface, db = deps
+    task = await repo.create(title="x", description="-", origin_chat_id=42)
+    await repo.update(task.id, status=TaskStatus.PLANNING)
+    await repo.update(task.id, status=TaskStatus.IN_PROGRESS)
+    await _backdate_last_event(db.path, task.id, minutes=10)
+
+    await scan_stale_tasks(
+        db_path=db.path,
+        surface=surface,
+        stale_after_minutes=5,
+        released_claims_count=0,
+    )
+
+    msgs = surface.dms_to(42)
+    assert all("Released" not in m for m in msgs)
+    assert any("/resume" in m.lower() for m in msgs)

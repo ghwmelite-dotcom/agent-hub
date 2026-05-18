@@ -23,8 +23,15 @@ async def scan_stale_tasks(
     db_path: Path,
     surface: MessageSurface,
     stale_after_minutes: int = 5,
+    released_claims_count: int = 0,
 ) -> int:
-    """DM each stale task's chat. Returns number of DMs sent."""
+    """DM each stale task's chat. Returns number of DMs sent.
+
+    `released_claims_count`: how many handoff rows the orchestrator
+    released on boot (claimed by the previous dead process). When >0
+    the DM mentions it so the user knows something was recovered
+    automatically rather than left in limbo.
+    """
     cutoff = datetime.now(timezone.utc).timestamp() - stale_after_minutes * 60
 
     async with aiosqlite.connect(db_path) as conn:
@@ -56,9 +63,18 @@ async def scan_stale_tasks(
         line = f"  #{row['id']} {row['title']} ({row['status']})"
         by_chat.setdefault(chat_id, []).append(line)
 
+    recovery_line = ""
+    if released_claims_count > 0:
+        plural = "s" if released_claims_count != 1 else ""
+        recovery_line = (
+            f"♻️ Released {released_claims_count} stuck handoff{plural} "
+            f"from last shutdown — they'll be re-dispatched automatically.\n\n"
+        )
+
     for chat_id, lines in by_chat.items():
         body = (
-            "🔄 Tasks that were in flight at last shutdown:\n"
+            recovery_line
+            + "🔄 Tasks that were in flight at last shutdown:\n"
             + "\n".join(lines)
             + "\n\nReply /resume <id> to pick one back up."
         )

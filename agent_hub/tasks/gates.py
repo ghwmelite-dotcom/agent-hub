@@ -72,6 +72,35 @@ class GateRepository:
             row = await cur.fetchone()
         return _row_to_gate(row) if row else None
 
+    async def unresolved_unnotified(self) -> list[Gate]:
+        """Gates awaiting user action that we haven't DM'd about yet.
+
+        Used by the gate watcher: announce each gate at most once across
+        the orchestrator's lifetime, including across restarts. The
+        in-memory `_notified_gates` set used to be a runtime-only filter;
+        it's now persisted via the `notified_at` column.
+        """
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                f"SELECT {_COLS}, notified_at FROM gates "
+                "WHERE resolved_at IS NULL AND notified_at IS NULL "
+                "ORDER BY requested_at ASC"
+            )
+            rows = await cur.fetchall()
+        return [_row_to_gate(r) for r in rows]
+
+    async def mark_notified(self, gate_id: int) -> None:
+        """Record that we DM'd the user about this gate. Idempotent."""
+        async with self._connect() as conn:
+            await conn.execute(
+                "UPDATE gates SET notified_at = ? "
+                "WHERE id = ? AND notified_at IS NULL",
+                (_utcnow_iso(), gate_id),
+            )
+            await conn.commit()
+
     async def count_unresolved(self) -> int:
         """Count of gates still awaiting user resolution — for /status."""
         async with self._connect() as conn:

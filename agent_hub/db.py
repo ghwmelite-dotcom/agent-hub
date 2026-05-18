@@ -91,10 +91,25 @@ CREATE TABLE IF NOT EXISTS gates (
     summary TEXT,
     requested_at TEXT NOT NULL,
     resolved_at TEXT,
-    resolution TEXT
+    resolution TEXT,
+    notified_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_gates_pending ON gates(task_id, kind) WHERE resolved_at IS NULL;
 """
+
+
+async def _migrate_gates_notified_at(conn: aiosqlite.Connection) -> None:
+    """Idempotent migration: ensure `gates.notified_at` exists.
+
+    SQLite's CREATE TABLE IF NOT EXISTS does not add new columns to a
+    pre-existing table. Existing deployments need an ALTER TABLE; we
+    check first via PRAGMA so the migration is safe to re-run.
+    """
+    cur = await conn.execute("PRAGMA table_info(gates)")
+    rows = await cur.fetchall()
+    existing = {r[1] for r in rows}  # column name is index 1
+    if "notified_at" not in existing:
+        await conn.execute("ALTER TABLE gates ADD COLUMN notified_at TEXT")
 
 _SCHEMA_WORKTREES = """
 CREATE TABLE IF NOT EXISTS worktrees (
@@ -125,6 +140,7 @@ class Database:
             await conn.executescript(_SCHEMA_HANDOFF_QUEUE)
             await conn.executescript(_SCHEMA_GATES)
             await conn.executescript(_SCHEMA_WORKTREES)
+            await _migrate_gates_notified_at(conn)
             await conn.commit()
         log.info("db.ready", path=str(self.path))
 

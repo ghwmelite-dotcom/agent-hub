@@ -83,7 +83,7 @@ async def test_foreign_keys_enforced(temp_db_path):
     async with aiosqlite.connect(temp_db_path) as conn:
         await conn.execute("PRAGMA foreign_keys = ON")
         # Try to insert a task_event for a non-existent task — should fail.
-        with pytest.raises(Exception):
+        with pytest.raises(aiosqlite.IntegrityError):
             await conn.execute(
                 "INSERT INTO task_events (task_id, ts, actor, kind, payload_json) "
                 "VALUES (?, ?, ?, ?, ?)",

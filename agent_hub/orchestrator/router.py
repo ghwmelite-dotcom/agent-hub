@@ -160,6 +160,7 @@ class Orchestrator:
         self._started = True
         self._stop_event.clear()
         self._tasks.append(asyncio.create_task(self._run_handoff_loop()))
+        self._tasks.append(asyncio.create_task(self._run_gate_watcher()))
 
     async def stop(self) -> None:
         """Signal all background loops to exit and wait for them."""
@@ -245,6 +246,18 @@ class Orchestrator:
                 await self._tick_handoff()
             except Exception as exc:
                 loop_log.exception("handoff_loop.tick_failed", error=str(exc))
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass
+
+    async def _run_gate_watcher(self) -> None:
+        log = structlog.get_logger("agent_hub.gate_watcher")
+        while not self._stop_event.is_set():
+            try:
+                await self._tick_gates()
+            except Exception as exc:
+                log.exception("gate_watcher.tick_failed", error=str(exc))
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=0.25)
             except asyncio.TimeoutError:

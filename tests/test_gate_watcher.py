@@ -67,3 +67,19 @@ async def test_tick_ignores_resolved_gates(deps):
     await orch._tick_gates()
 
     assert surface.sent == []
+
+
+@pytest.mark.asyncio
+async def test_loop_picks_up_new_gates(deps):
+    orch, surface, repo, gates = deps
+    await orch.start()
+    try:
+        task = await repo.create(title="x", description="-", origin_chat_id=77)
+        await gates.request(task_id=task.id, kind="design")
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if surface.sent:
+                break
+        assert any(f"#{task.id}" in m for _, m in surface.sent)
+    finally:
+        await orch.stop()

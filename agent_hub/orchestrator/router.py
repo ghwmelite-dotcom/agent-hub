@@ -171,8 +171,18 @@ class Orchestrator:
             chars=len(routed.text),
         )
 
+        # PM needs the chat_id to set `origin_chat_id` when it calls
+        # `tasks_create` for fresh user messages. The handoff path
+        # already prefixes with `[task #N, ...]` (which carries the
+        # chat_id transitively via the task row), so this only matters
+        # for direct user→@pm messages from `handle()`.
+        if routed.agent == "pm":
+            dispatch_text = f"[chat_id={chat_id}] {routed.text}"
+        else:
+            dispatch_text = routed.text
+
         accumulated: list[str] = []
-        async for event in self.runner.send(routed.agent, routed.text):
+        async for event in self.runner.send(routed.agent, dispatch_text):
             yield routed.display_name, event
             # Accumulate text for persistence.
             text = getattr(event, "text", None)

@@ -98,3 +98,19 @@ async def test_create_records_db_row(manager_deps):
     assert row is not None
     assert row.branch == f"task/{task.id}-x"
     assert row.cleaned_at is None
+
+
+@pytest.mark.asyncio
+async def test_path_returns_recorded_path(manager_deps):
+    manager, repo, worktrees_root = manager_deps
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    created = await manager.create(task_id=task.id, title=task.title)
+
+    looked_up = await manager.path(task.id)
+    assert looked_up == created["path"]
+
+
+@pytest.mark.asyncio
+async def test_path_returns_none_for_unknown_task(manager_deps):
+    manager, _, _ = manager_deps
+    assert await manager.path(99999) is None

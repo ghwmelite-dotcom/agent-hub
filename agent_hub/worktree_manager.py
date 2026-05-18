@@ -73,3 +73,8 @@ class WorktreeManager:
             task_id=task_id, path=str(path), branch=branch, base_branch=base_branch,
         )
         return {"path": str(path), "branch": branch}
+
+    async def path(self, task_id: int) -> str | None:
+        """Return the recorded worktree path for task_id, or None."""
+        row = await self._repo.get_by_task(task_id)
+        return row.path if row else None

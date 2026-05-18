@@ -84,5 +84,8 @@ def test_role_system_prompt_mentions_mcp_tools(registry, role_name):
     role = registry.get(role_name)
     prompt = role.system_prompt.lower()
     assert any(keyword in prompt for keyword in (
-        "tasks.create", "tasks.get", "handoff", "gate.request",
+        "mcp__agent_hub__tasks_create",
+        "mcp__agent_hub__tasks_get",
+        "mcp__agent_hub__handoff",
+        "mcp__agent_hub__gate_request",
     )), f"Role {role_name!r} prompt doesn't mention any orchestration tool."

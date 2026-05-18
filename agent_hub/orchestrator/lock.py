@@ -27,6 +27,18 @@ class OrchestratorLock:
 
     def acquire(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        if self.path.exists():
+            existing = self.path.read_text().strip()
+            try:
+                existing_pid = int(existing)
+            except ValueError:
+                existing_pid = None
+            if existing_pid is not None and psutil.pid_exists(existing_pid):
+                raise LockHeld(
+                    f"Lock {self.path} held by live PID {existing_pid}. "
+                    f"Stop the other agent_hub process or remove the lock file."
+                )
+            # Stale — fall through to overwrite.
         self.path.write_text(str(os.getpid()))
         self._owned = True
 

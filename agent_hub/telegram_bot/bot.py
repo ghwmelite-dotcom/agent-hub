@@ -396,7 +396,26 @@ def build_application(
         except ValueError:
             await update.effective_chat.send_message("Task id must be an integer.")
             return
-        reply = await handle_approve(task_id=task_id, db_path=db_path)
+
+        # Pull the LIVE workspace from the runner, not the static env value.
+        # User may have switched via /workspace <path>.
+        repo_root = orchestrator.runner.workspace
+
+        if repo_root is None:
+            await update.effective_chat.send_message(
+                "Cannot approve — no workspace is configured. "
+                "Set AGENT_WORKSPACES in .env or use /workspace <path> first."
+            )
+            return
+
+        worktrees_root = repo_root.parent / "worktrees"
+
+        reply = await handle_approve(
+            task_id=task_id,
+            db_path=db_path,
+            repo_root=repo_root,
+            worktrees_root=worktrees_root,
+        )
         await update.effective_chat.send_message(reply)
 
     async def _on_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

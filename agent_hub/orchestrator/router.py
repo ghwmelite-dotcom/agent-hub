@@ -177,3 +177,22 @@ class Orchestrator:
                     pass
         self._tasks.clear()
         self._started = False
+
+    async def _tick_handoff(self) -> None:
+        """Claim at most one handoff queue row and dispatch it.
+
+        Called repeatedly by the handoff loop (Task 5). Splitting the
+        tick from the loop makes the dispatch logic unit-testable.
+        """
+        from agent_hub.tasks.handoff_queue import HandoffQueue
+
+        queue = HandoffQueue(self.db.path)
+        row = await queue.claim()
+        if row is None:
+            return
+
+        routed_text = f"[task #{row.task_id}, from @{row.from_agent}] {row.message}"
+        async for _event in self.runner.send(row.to_agent, routed_text, task_id=row.task_id):
+            # Streaming the agent's events to Telegram lands in Task 6.
+            # For now we just drain the iterator.
+            pass

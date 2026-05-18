@@ -7,7 +7,7 @@ orchestrator (later plan) detects the pending row and DMs the user.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +97,48 @@ class GateRepository:
             await conn.execute(
                 "UPDATE gates SET notified_at = ? "
                 "WHERE id = ? AND notified_at IS NULL",
+                (_utcnow_iso(), gate_id),
+            )
+            await conn.commit()
+
+    async def needing_reminder(
+        self,
+        *,
+        now: datetime | None = None,
+        timeout_hours: float = 24.0,
+    ) -> list[Gate]:
+        """Gates that have been pending too long and need a nudge DM.
+
+        Returns gates where:
+        - resolved_at IS NULL (still pending)
+        - notified_at IS NOT NULL (already announced once — the
+          gate-watcher's first pass handled them on creation)
+        - requested_at is older than `timeout_hours` ago
+        - last_reminder_at is either NULL or older than `timeout_hours`
+          ago (so reminders fire at most every `timeout_hours`)
+        """
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=timeout_hours)
+        cutoff_iso = cutoff.isoformat()
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                f"SELECT {_COLS}, notified_at, last_reminder_at FROM gates "
+                "WHERE resolved_at IS NULL "
+                "AND notified_at IS NOT NULL "
+                "AND requested_at < ? "
+                "AND (last_reminder_at IS NULL OR last_reminder_at < ?) "
+                "ORDER BY requested_at ASC",
+                (cutoff_iso, cutoff_iso),
+            )
+            rows = await cur.fetchall()
+        return [_row_to_gate(r) for r in rows]
+
+    async def mark_reminder_sent(self, gate_id: int) -> None:
+        """Update last_reminder_at to now. Always rewrites — explicit."""
+        async with self._connect() as conn:
+            await conn.execute(
+                "UPDATE gates SET last_reminder_at = ? WHERE id = ?",
                 (_utcnow_iso(), gate_id),
             )
             await conn.commit()

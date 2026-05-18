@@ -14,6 +14,7 @@ import asyncio
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 import structlog
@@ -114,6 +115,8 @@ class Orchestrator:
         repo_root: Path | None = None,
         default_agent: str = "pm",
         handoff_worker_count: int = 1,
+        gate_reminder_hours: float = 24.0,
+        stuck_turn_threshold: int = 12,
     ):
         self.registry = registry
         self.runner = runner
@@ -122,6 +125,8 @@ class Orchestrator:
         self.repo_root = repo_root
         self.default_agent = default_agent
         self.handoff_worker_count = max(1, handoff_worker_count)
+        self.gate_reminder_hours = gate_reminder_hours
+        self.stuck_turn_threshold = stuck_turn_threshold
         # Per-chat sticky agent — last agent the user was talking to.
         self._sticky: dict[int, str] = {}
         self._stop_event = asyncio.Event()
@@ -394,6 +399,61 @@ class Orchestrator:
             await self.surface.dm(task.origin_chat_id, msg)
             await gates.mark_notified(gate.id)
 
+        # Second pass: gates that have been pending too long get a nudge.
+        # Threshold defaults to 24h via GateRepository.needing_reminder.
+        reminders = await gates.needing_reminder(
+            timeout_hours=self.gate_reminder_hours,
+        )
+        for gate in reminders:
+            task = await repo.get(gate.task_id)
+            if task is None:
+                continue
+            requested_at = gate.requested_at
+            age_hours = (
+                datetime.now(timezone.utc) - requested_at
+            ).total_seconds() / 3600
+            summary = gate.summary or ""
+            msg = (
+                f"⏰ Reminder: task #{task.id} has been awaiting your "
+                f"design approval for ~{age_hours:.0f}h"
+                + (f" — {summary}" if summary else "")
+                + f"\nReply /approve {task.id} or /reject {task.id} <reason>."
+            )
+            await self.surface.dm(task.origin_chat_id, msg)
+            await gates.mark_reminder_sent(gate.id)
+
+    async def _tick_stuck_tasks(self) -> None:
+        """DM the user when a non-terminal task has hit the turn ceiling
+        without a status change.
+
+        Idempotent: a `stuck_alert` event is appended after the DM and
+        the next tick won't re-fire until the task's status changes again.
+        """
+        if self.surface is None:
+            return
+        from agent_hub.state_machine import TaskStatus
+        from agent_hub.tasks.repository import TaskRepository
+
+        repo = TaskRepository(self.db.path)
+        active = await repo.list()
+        for task in active:
+            if task.status in (TaskStatus.DONE, TaskStatus.BLOCKED):
+                continue
+            turns = await repo.turns_since_status_change(task.id)
+            if turns < self.stuck_turn_threshold:
+                continue
+            if await repo.stuck_alert_pending(task.id):
+                continue
+            msg = (
+                f"🚨 Task #{task.id} ({task.title!r}) looks stuck — "
+                f"{turns} agent turns since the last status change "
+                f"(currently `{task.status.value}`).\n"
+                f"`/task {task.id}` for details, `/cancel {task.id}` to "
+                f"abort, or let it continue."
+            )
+            await self.surface.dm(task.origin_chat_id, msg)
+            await repo.record_stuck_alert(task.id, turn_count=turns)
+
     async def _run_handoff_loop(self) -> None:
         loop_log = structlog.get_logger("agent_hub.handoff_loop")
         while not self._stop_event.is_set():
@@ -411,6 +471,7 @@ class Orchestrator:
         while not self._stop_event.is_set():
             try:
                 await self._tick_gates()
+                await self._tick_stuck_tasks()
             except Exception as exc:
                 log.exception("gate_watcher.tick_failed", error=str(exc))
             try:

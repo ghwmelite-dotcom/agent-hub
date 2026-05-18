@@ -269,6 +269,72 @@ class TaskRepository:
             )
             await conn.commit()
 
+    async def turns_since_status_change(self, task_id: int) -> int:
+        """Count handoff_queue rows enqueued since the latest status_change.
+
+        Used by the stuck-task watcher. A high count with no status change
+        means the agent team is churning without making forward progress —
+        a strong signal to surface to the user.
+        """
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT MAX(ts) AS ts FROM task_events "
+                "WHERE task_id = ? AND kind = 'status_change'",
+                (task_id,),
+            )
+            row = await cur.fetchone()
+            last_change = row["ts"] if row else None
+            if last_change is None:
+                # No status change yet — count everything for this task.
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM handoff_queue WHERE task_id = ?",
+                    (task_id,),
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT COUNT(*) FROM handoff_queue "
+                    "WHERE task_id = ? AND enqueued_at > ?",
+                    (task_id, last_change),
+                )
+            count_row = await cur.fetchone()
+        return int(count_row[0]) if count_row else 0
+
+    async def stuck_alert_pending(self, task_id: int) -> bool:
+        """True iff we've already emitted a stuck_alert since the last
+        status_change. Used to avoid re-DMing the same stuck episode."""
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT MAX(ts) AS ts FROM task_events "
+                "WHERE task_id = ? AND kind = 'status_change'",
+                (task_id,),
+            )
+            row = await cur.fetchone()
+            last_change = row["ts"] if row else None
+            if last_change is None:
+                cur = await conn.execute(
+                    "SELECT 1 FROM task_events "
+                    "WHERE task_id = ? AND kind = 'stuck_alert' LIMIT 1",
+                    (task_id,),
+                )
+            else:
+                cur = await conn.execute(
+                    "SELECT 1 FROM task_events "
+                    "WHERE task_id = ? AND kind = 'stuck_alert' AND ts > ? LIMIT 1",
+                    (task_id, last_change),
+                )
+            return await cur.fetchone() is not None
+
+    async def record_stuck_alert(self, task_id: int, *, turn_count: int) -> None:
+        """Append a stuck_alert event so the next tick won't re-DM."""
+        await self._append_event(
+            task_id,
+            actor="system",
+            kind="stuck_alert",
+            payload={"turn_count": turn_count},
+        )
+
     async def total_cost_usd(self) -> float:
         """Sum of cost_usd_total across all tasks."""
         async with self._connect() as conn:

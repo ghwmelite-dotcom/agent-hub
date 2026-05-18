@@ -117,6 +117,8 @@ class Database:
     async def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as conn:
+            await conn.execute("PRAGMA journal_mode = WAL")
+            await conn.execute("PRAGMA foreign_keys = ON")
             await conn.executescript(SCHEMA)
             await conn.executescript(_SCHEMA_TASKS)
             await conn.executescript(_SCHEMA_TASK_EVENTS)

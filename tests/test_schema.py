@@ -65,3 +65,28 @@ async def test_gates_columns(temp_db_path):
         "id", "task_id", "kind", "artifact_path", "summary",
         "requested_at", "resolved_at", "resolution",
     }
+
+
+@pytest.mark.asyncio
+async def test_wal_mode_enabled(temp_db_path):
+    db = Database(temp_db_path)
+    await db.init()
+    async with aiosqlite.connect(temp_db_path) as conn:
+        row = await (await conn.execute("PRAGMA journal_mode")).fetchone()
+    assert row[0].lower() == "wal"
+
+
+@pytest.mark.asyncio
+async def test_foreign_keys_enforced(temp_db_path):
+    db = Database(temp_db_path)
+    await db.init()
+    async with aiosqlite.connect(temp_db_path) as conn:
+        await conn.execute("PRAGMA foreign_keys = ON")
+        # Try to insert a task_event for a non-existent task — should fail.
+        with pytest.raises(Exception):
+            await conn.execute(
+                "INSERT INTO task_events (task_id, ts, actor, kind, payload_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (999, "2026-05-17T00:00:00Z", "test", "comment", "{}"),
+            )
+            await conn.commit()

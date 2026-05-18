@@ -9,7 +9,11 @@ just `task/<id>`.
 
 from __future__ import annotations
 
+import asyncio
 import re
+from pathlib import Path
+
+from agent_hub.tasks.worktree_repo import WorktreeRepository
 
 _SLUG_REPLACE_RE = re.compile(r"[^a-z0-9]+")
 _TITLE_MAX = 60
@@ -28,3 +32,44 @@ def branch_slug(task_id: int, title: str) -> str:
     if not truncated:
         return f"task/{task_id}"
     return f"task/{task_id}-{truncated}"
+
+
+class WorktreeManager:
+    def __init__(self, repo_root: Path, worktrees_root: Path, db_path: Path):
+        self.repo_root = Path(repo_root)
+        self.worktrees_root = Path(worktrees_root)
+        self.db_path = Path(db_path)
+        self._repo = WorktreeRepository(self.db_path)
+
+    async def _run_git(self, *args: str) -> tuple[int, str, str]:
+        """Run `git <args>` from repo_root. Returns (returncode, stdout, stderr)."""
+        proc = await asyncio.create_subprocess_exec(
+            "git", *args,
+            cwd=str(self.repo_root),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout_b, stderr_b = await proc.communicate()
+        return proc.returncode or 0, stdout_b.decode("utf-8", errors="replace"), stderr_b.decode("utf-8", errors="replace")
+
+    async def create(self, *, task_id: int, title: str, base_branch: str = "main") -> dict:
+        """Create a worktree at <worktrees_root>/<task_id>/ on branch task/<id>-<slug>.
+
+        Returns {"path": str, "branch": str}. Records in the worktrees table.
+        """
+        branch = branch_slug(task_id, title)
+        path = self.worktrees_root / str(task_id)
+        self.worktrees_root.mkdir(parents=True, exist_ok=True)
+
+        rc, stdout, stderr = await self._run_git(
+            "worktree", "add", "-b", branch, str(path), base_branch,
+        )
+        if rc != 0:
+            raise RuntimeError(
+                f"git worktree add failed (rc={rc}): {stderr.strip() or stdout.strip()}"
+            )
+
+        await self._repo.record(
+            task_id=task_id, path=str(path), branch=branch, base_branch=base_branch,
+        )
+        return {"path": str(path), "branch": branch}

@@ -63,8 +63,39 @@ async def test_gates_columns(temp_db_path):
     cols = {r[1] for r in rows}
     assert cols == {
         "id", "task_id", "kind", "artifact_path", "summary",
-        "requested_at", "resolved_at", "resolution",
+        "requested_at", "resolved_at", "resolution", "notified_at",
     }
+
+
+@pytest.mark.asyncio
+async def test_gates_notified_at_migration_idempotent(temp_db_path):
+    """A pre-existing DB without `notified_at` gets it added; init() can
+    be called again with no error and no duplicate-column issue."""
+    # Seed a DB that looks like the pre-migration schema
+    async with aiosqlite.connect(temp_db_path) as conn:
+        await conn.execute(
+            "CREATE TABLE gates ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "task_id INTEGER NOT NULL,"
+            "kind TEXT NOT NULL,"
+            "artifact_path TEXT,"
+            "summary TEXT,"
+            "requested_at TEXT NOT NULL,"
+            "resolved_at TEXT,"
+            "resolution TEXT"
+            ")"
+        )
+        await conn.commit()
+
+    # First init: should ALTER TABLE in the new column
+    await Database(temp_db_path).init()
+    async with aiosqlite.connect(temp_db_path) as conn:
+        rows = await (await conn.execute("PRAGMA table_info(gates)")).fetchall()
+    cols = {r[1] for r in rows}
+    assert "notified_at" in cols
+
+    # Second init: must be a no-op (no duplicate-column error)
+    await Database(temp_db_path).init()
 
 
 @pytest.mark.asyncio

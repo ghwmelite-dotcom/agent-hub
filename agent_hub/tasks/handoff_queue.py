@@ -81,6 +81,29 @@ class HandoffQueue:
             rows = await cur.fetchall()
         return [_row_to_model(r) for r in rows]
 
+    async def release_stale_claims(self) -> int:
+        """Reset `claimed_at = NULL` for rows belonging to active tasks.
+
+        Called once at orchestrator startup. The single-instance lock
+        guarantees only one orchestrator runs at a time, so any row in
+        `claimed` state on boot was claimed by a previous (now dead)
+        process. Rows are kept after dispatch as an audit trail though,
+        so we only release ones whose task is still in a NON-TERMINAL
+        status — DONE/BLOCKED rows are historical and replaying them
+        would be wrong.
+
+        Returns the number of rows released.
+        """
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            cur = await conn.execute(
+                "UPDATE handoff_queue SET claimed_at = NULL "
+                "WHERE claimed_at IS NOT NULL "
+                "AND task_id IN (SELECT id FROM tasks WHERE status NOT IN ('done', 'blocked'))"
+            )
+            await conn.commit()
+            return cur.rowcount or 0
+
     async def drop_pending_for_task(self, task_id: int) -> int:
         """Delete unclaimed rows for `task_id`. Returns the row count.
 

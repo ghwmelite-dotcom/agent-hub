@@ -109,7 +109,11 @@ async def _post_init(app, settings: Settings, runner: AgentRunner, db: Database,
 
     # Restart-resume scan once at boot, after start so the loops are running.
     from agent_hub.orchestrator.resume import scan_stale_tasks
-    await scan_stale_tasks(db_path=settings.database_path, surface=orchestrator.surface)
+    await scan_stale_tasks(
+        db_path=settings.database_path,
+        surface=orchestrator.surface,
+        released_claims_count=orchestrator.released_stale_claims,
+    )
 
 
 async def _post_shutdown(app, runner: AgentRunner, orchestrator) -> None:

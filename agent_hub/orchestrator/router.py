@@ -113,6 +113,7 @@ class Orchestrator:
         surface: MessageSurface | None = None,
         repo_root: Path | None = None,
         default_agent: str = "pm",
+        handoff_worker_count: int = 1,
     ):
         self.registry = registry
         self.runner = runner
@@ -120,6 +121,7 @@ class Orchestrator:
         self.surface = surface
         self.repo_root = repo_root
         self.default_agent = default_agent
+        self.handoff_worker_count = max(1, handoff_worker_count)
         # Per-chat sticky agent — last agent the user was talking to.
         self._sticky: dict[int, str] = {}
         self._stop_event = asyncio.Event()
@@ -128,6 +130,9 @@ class Orchestrator:
         # `notified_at` is persisted on gates so restart doesn't re-DM.
         # Set by start(); read by scan_stale_tasks to surface in the boot DM.
         self.released_stale_claims: int = 0
+        # Budget cap: DM the user once when dispatch pauses, then go quiet
+        # until spend drops back below the cap (or the cap is raised).
+        self._cap_dm_sent: bool = False
 
     def sticky_for(self, chat_id: int) -> str | None:
         return self._sticky.get(chat_id)
@@ -217,7 +222,10 @@ class Orchestrator:
             log.info("orchestrator.released_stale_claims", count=released)
         self.released_stale_claims = released
 
-        self._tasks.append(asyncio.create_task(self._run_handoff_loop()))
+        for i in range(self.handoff_worker_count):
+            self._tasks.append(
+                asyncio.create_task(self._run_handoff_loop(), name=f"handoff-worker-{i}")
+            )
         self._tasks.append(asyncio.create_task(self._run_gate_watcher()))
 
     async def stop(self) -> None:
@@ -237,11 +245,65 @@ class Orchestrator:
         self._tasks.clear()
         self._started = False
 
+    async def _check_budget_cap(self) -> bool:
+        """Return True if dispatch is allowed (cap unset or not exceeded).
+
+        On the first tick where the cap is exceeded, DM the user once.
+        When spend drops back below the cap (e.g. user raised it), reset
+        the DM flag so future excursions get fresh notifications.
+        """
+        from agent_hub.telegram_bot.commands.budget_cmd import get_budget_cap
+        from agent_hub.tasks.repository import TaskRepository
+
+        cap = await get_budget_cap(self.db.path)
+        if cap is None:
+            return True
+
+        repo = TaskRepository(self.db.path)
+        spent = await repo.total_cost_usd()
+        if spent < cap:
+            self._cap_dm_sent = False
+            return True
+
+        if not self._cap_dm_sent and self.surface is not None:
+            chat_id = await self._first_active_chat_id()
+            if chat_id is not None:
+                await self.surface.dm(
+                    chat_id,
+                    (
+                        f"💰 Budget cap of ${cap:.2f} reached "
+                        f"(spent ${spent:.4f}). Dispatch paused.\n"
+                        f"`/budget <amount>` to raise, `/budget off` to remove."
+                    ),
+                )
+            self._cap_dm_sent = True
+        return False
+
+    async def _first_active_chat_id(self) -> int | None:
+        """Find one chat_id that has an in-flight (non-terminal) task.
+
+        Used to address the cap-reached DM somewhere visible. Returns
+        None when no task is active — no DM is needed in that case.
+        """
+        import aiosqlite
+        async with aiosqlite.connect(self.db.path) as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT origin_chat_id FROM tasks "
+                "WHERE status NOT IN ('done', 'blocked') "
+                "ORDER BY updated_at DESC LIMIT 1"
+            )
+            row = await cur.fetchone()
+        return int(row["origin_chat_id"]) if row else None
+
     async def _tick_handoff(self) -> None:
         """Claim at most one handoff queue row and dispatch it."""
-        from agent_hub.agents.runner import TextChunk
+        from agent_hub.agents.runner import TextChunk, TurnDone
         from agent_hub.tasks.handoff_queue import HandoffQueue
         from agent_hub.tasks.repository import TaskRepository
+
+        if not await self._check_budget_cap():
+            return
 
         queue = HandoffQueue(self.db.path)
         row = await queue.claim()
@@ -258,6 +320,8 @@ class Orchestrator:
         async for event in self.runner.send(row.to_agent, routed_text, task_id=row.task_id):
             if isinstance(event, TextChunk):
                 accumulated.append(event.text)
+            elif isinstance(event, TurnDone) and event.cost_usd:
+                await repo.add_cost(row.task_id, event.cost_usd)
 
         if self.surface is not None and chat_id is not None and accumulated:
             body = "".join(accumulated).strip()

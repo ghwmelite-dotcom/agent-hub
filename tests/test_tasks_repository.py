@@ -190,3 +190,39 @@ async def test_status_change_writes_event(repo):
     events = await repo.events(t.id)
     kinds = [e.kind for e in events]
     assert "status_change" in kinds
+
+
+@pytest.mark.asyncio
+async def test_add_cost_accumulates(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    assert t.cost_usd_total == 0.0
+
+    await repo.add_cost(t.id, 0.42)
+    await repo.add_cost(t.id, 0.18)
+
+    fresh = await repo.get(t.id)
+    assert abs(fresh.cost_usd_total - 0.60) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_add_cost_ignores_non_positive(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    await repo.add_cost(t.id, 0.0)
+    await repo.add_cost(t.id, -1.5)
+    fresh = await repo.get(t.id)
+    assert fresh.cost_usd_total == 0.0
+
+
+@pytest.mark.asyncio
+async def test_total_cost_usd_sums_across_tasks(repo):
+    t1 = await repo.create(title="a", description="-", origin_chat_id=1)
+    t2 = await repo.create(title="b", description="-", origin_chat_id=1)
+    await repo.add_cost(t1.id, 1.25)
+    await repo.add_cost(t2.id, 0.75)
+    total = await repo.total_cost_usd()
+    assert abs(total - 2.0) < 1e-9
+
+
+@pytest.mark.asyncio
+async def test_total_cost_usd_zero_when_empty(repo):
+    assert await repo.total_cost_usd() == 0.0

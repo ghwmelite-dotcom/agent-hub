@@ -38,12 +38,14 @@ def _row_to_task(row: aiosqlite.Row) -> Task:
         origin_chat_id=row["origin_chat_id"],
         created_at=_parse_dt(row["created_at"]),
         updated_at=_parse_dt(row["updated_at"]),
+        cost_usd_total=float(row["cost_usd_total"] or 0.0),
     )
 
 
 _TASK_COLS = (
     "id, parent_id, title, description, status, owner, "
-    "worktree_path, branch_name, origin_chat_id, created_at, updated_at"
+    "worktree_path, branch_name, origin_chat_id, created_at, updated_at, "
+    "cost_usd_total"
 )
 
 
@@ -248,3 +250,30 @@ class TaskRepository:
             )
 
         return await self.get(task_id)
+
+    async def add_cost(self, task_id: int, cost_usd: float) -> None:
+        """Accumulate a per-turn cost onto tasks.cost_usd_total.
+
+        Idempotent at row level but NOT at call-site — each TurnDone
+        with a non-None cost_usd should be added exactly once.
+        Zero / negative inputs are no-ops to keep the call-site simple.
+        """
+        if cost_usd <= 0:
+            return
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            await conn.execute(
+                "UPDATE tasks SET cost_usd_total = cost_usd_total + ? "
+                "WHERE id = ?",
+                (cost_usd, task_id),
+            )
+            await conn.commit()
+
+    async def total_cost_usd(self) -> float:
+        """Sum of cost_usd_total across all tasks."""
+        async with self._connect() as conn:
+            cur = await conn.execute(
+                "SELECT COALESCE(SUM(cost_usd_total), 0) FROM tasks"
+            )
+            row = await cur.fetchone()
+        return float(row[0]) if row else 0.0

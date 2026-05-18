@@ -55,6 +55,7 @@ def _build_orchestrator(
         db=db,
         surface=surface,
         repo_root=settings.default_workspace,
+        handoff_worker_count=settings.handoff_worker_count,
     )
 
 

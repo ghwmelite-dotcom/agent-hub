@@ -146,3 +146,47 @@ async def test_update_refreshes_updated_at(repo):
     await asyncio.sleep(0.01)
     updated = await repo.update(t.id, owner="pm")
     assert updated.updated_at > original
+
+
+@pytest.mark.asyncio
+async def test_comment_appends_event(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    event_id = await repo.comment(t.id, actor="pm", body="filed the task")
+    assert event_id > 0
+
+    events = await repo.events(t.id)
+    assert len(events) == 1
+    assert events[0].kind == "comment"
+    assert events[0].actor == "pm"
+    assert events[0].payload == {"body": "filed the task"}
+
+
+@pytest.mark.asyncio
+async def test_events_ordered_by_time(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    import asyncio
+    await repo.comment(t.id, actor="pm", body="one")
+    await asyncio.sleep(0.01)
+    await repo.comment(t.id, actor="architect", body="two")
+    events = await repo.events(t.id)
+    assert [e.payload["body"] for e in events] == ["one", "two"]
+
+
+@pytest.mark.asyncio
+async def test_events_limit_returns_recent(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    import asyncio
+    for i in range(5):
+        await repo.comment(t.id, actor="pm", body=str(i))
+        await asyncio.sleep(0.001)  # ensure ordering by ts
+    events = await repo.events(t.id, limit=2)
+    assert [e.payload["body"] for e in events] == ["3", "4"]
+
+
+@pytest.mark.asyncio
+async def test_status_change_writes_event(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    await repo.update(t.id, status=TaskStatus.PLANNING)
+    events = await repo.events(t.id)
+    kinds = [e.kind for e in events]
+    assert "status_change" in kinds

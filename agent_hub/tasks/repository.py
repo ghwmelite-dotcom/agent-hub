@@ -6,6 +6,7 @@ are enforced; transitions are validated via state_machine.
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -147,6 +148,53 @@ class TaskRepository:
                 frontier = [c.id for c in new_children]
         return {"root": root, "descendants": descendants}
 
+    async def _append_event(self, task_id: int, *, actor: str, kind: str, payload: dict) -> int:
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "INSERT INTO task_events (task_id, ts, actor, kind, payload_json) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (task_id, _utcnow_iso(), actor, kind, json.dumps(payload)),
+            )
+            await conn.commit()
+            return cur.lastrowid  # type: ignore[return-value]
+
+    async def comment(self, task_id: int, *, actor: str, body: str) -> int:
+        return await self._append_event(task_id, actor=actor, kind="comment", payload={"body": body})
+
+    async def events(self, task_id: int, *, limit: int | None = None) -> list:
+        """Returns TaskEvent list ordered by ts ASC. If limit, returns the *most recent* `limit`."""
+        from agent_hub.tasks.models import TaskEvent
+
+        if limit is not None:
+            sql = (
+                "SELECT id, task_id, ts, actor, kind, payload_json FROM task_events "
+                "WHERE task_id = ? ORDER BY ts DESC LIMIT ?"
+            )
+            args: tuple = (task_id, limit)
+        else:
+            sql = (
+                "SELECT id, task_id, ts, actor, kind, payload_json FROM task_events "
+                "WHERE task_id = ? ORDER BY ts ASC"
+            )
+            args = (task_id,)
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(sql, args)
+            rows = await cur.fetchall()
+        events_list = [
+            TaskEvent(
+                id=r["id"], task_id=r["task_id"], ts=_parse_dt(r["ts"]),
+                actor=r["actor"], kind=r["kind"], payload=json.loads(r["payload_json"]),
+            )
+            for r in rows
+        ]
+        if limit is not None:
+            events_list.reverse()  # restore chronological order
+        return events_list
+
     async def update(
         self,
         task_id: int,
@@ -163,6 +211,8 @@ class TaskRepository:
             return None
         if status is not None and status != current.status:
             validate_transition(current.status, status)
+
+        status_changed = status is not None and status != current.status
 
         sets: list[str] = ["updated_at = ?"]
         params: list = [_utcnow_iso()]
@@ -188,4 +238,13 @@ class TaskRepository:
                 tuple(params),
             )
             await conn.commit()
+
+        if status_changed:
+            await self._append_event(
+                task_id,
+                actor="system",
+                kind="status_change",
+                payload={"from": current.status.value, "to": status.value},
+            )
+
         return await self.get(task_id)

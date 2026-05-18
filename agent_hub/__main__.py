@@ -56,6 +56,8 @@ def _build_orchestrator(
         surface=surface,
         repo_root=settings.default_workspace,
         handoff_worker_count=settings.handoff_worker_count,
+        gate_reminder_hours=settings.gate_reminder_hours,
+        stuck_turn_threshold=settings.stuck_turn_threshold,
     )
 
 

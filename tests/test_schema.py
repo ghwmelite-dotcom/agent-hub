@@ -63,7 +63,8 @@ async def test_gates_columns(temp_db_path):
     cols = {r[1] for r in rows}
     assert cols == {
         "id", "task_id", "kind", "artifact_path", "summary",
-        "requested_at", "resolved_at", "resolution", "notified_at",
+        "requested_at", "resolved_at", "resolution",
+        "notified_at", "last_reminder_at",
     }
 
 

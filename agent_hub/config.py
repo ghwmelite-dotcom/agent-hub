@@ -55,6 +55,26 @@ class Settings(BaseModel):
         ),
     )
 
+    # Watchdogs
+    gate_reminder_hours: float = Field(
+        default=24.0,
+        gt=0,
+        description=(
+            "Send a reminder DM about a still-pending design gate after "
+            "this many hours, then every gate_reminder_hours thereafter."
+        ),
+    )
+    stuck_turn_threshold: int = Field(
+        default=12,
+        gt=0,
+        description=(
+            "DM the user when a non-terminal task has had this many "
+            "handoff turns since its last status_change. Default 12 = "
+            "happy path (~5 turns) plus headroom for one round of "
+            "reviewer kick-back."
+        ),
+    )
+
     # Computed
     project_root: Path = _PROJECT_ROOT
 
@@ -93,6 +113,8 @@ def load_settings() -> Settings:
         database_path=os.getenv("DATABASE_PATH", "./data/agent_hub.db"),
         log_level=os.getenv("LOG_LEVEL", "INFO"),
         handoff_worker_count=int(os.getenv("HANDOFF_WORKER_COUNT", "3")),
+        gate_reminder_hours=float(os.getenv("GATE_REMINDER_HOURS", "24")),
+        stuck_turn_threshold=int(os.getenv("STUCK_TURN_THRESHOLD", "12")),
     )
 
 

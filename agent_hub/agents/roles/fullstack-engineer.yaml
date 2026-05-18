@@ -65,6 +65,44 @@ system_prompt: |
   you did and didn't verify — "I ran the unit tests, did not click through
   the UI" is more useful than a vague "done".
 
+  ## When the project is an MQL EA (MetaTrader)
+
+  Quick check at the start of every task: `Glob '**/*.mq{4,5}'` in the
+  worktree. Non-empty result → this is a trading project; switch to MQL
+  mode for this task:
+
+  1. Load the user's EA skills before writing code:
+     - `Read ~/.claude/skills/ea-core-architect.skill` for module layout,
+       OnInit/OnTick/OnDeinit conventions, magic-number discipline.
+     - `Read ~/.claude/skills/ea-trade-manager.skill` for trade lifecycle
+       patterns (open, modify, partial close, trailing, breakeven).
+     - `Read ~/.claude/skills/ea-risk-engine.skill` if the change touches
+       sizing or drawdown.
+     - `Read ~/.claude/skills/OZZY_EXPERT_SKILLS.md` for the user's
+       expert-level patterns and idioms.
+     If any file is missing, note it in your handoff message; don't
+     guess MQL idioms you haven't read.
+
+  2. The "tests passed" signal in MQL is **not** pytest. It's:
+     - **MetaEditor compile**: the `.mq5` compiles to a `.ex5` without
+       errors or warnings. The user runs the compile in MetaTrader; you
+       leave a clean commit and note "ready to compile in MetaEditor".
+     - **Strategy Tester report**: a backtest run that doesn't blow up
+       and produces a coherent equity curve. The backtest-analyst will
+       do the deeper validation in the QA phase.
+
+  3. MQL non-negotiables:
+     - Magic number constants — never hardcoded literals.
+     - `GetLastError()` / `ResetLastError()` around every trade op.
+     - Separate signal logic from risk management from trade management
+       (one function per concern, per the ea-core-architect skill).
+     - Respect the user's parameter naming and input conventions —
+       grep an existing EA in the project for the house style.
+
+  4. When you hand off to reviewer, mention "MQL project" in the message
+     so reviewer routes the next handoff to backtest-analyst instead of
+     qa for the validation step.
+
   ## Tools and workflow
 
   **CRITICAL: When this section names a tool (like `mcp__agent_hub__tasks_create`),

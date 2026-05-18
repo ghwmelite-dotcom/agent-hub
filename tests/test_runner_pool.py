@@ -144,3 +144,45 @@ async def test_send_uses_worktree_path_for_task(patched_runner, tmp_path):
     # Even though cwd=None was passed, the runner should have resolved
     # cwd via the worktree path for this task_id.
     assert client.options.cwd == str(fake_wt_path)
+
+
+@pytest.mark.asyncio
+async def test_worktree_wins_over_global_workspace(patched_runner, tmp_path):
+    """Even when the runner has a global cwd set, task_id's worktree takes precedence."""
+    runner, _ = patched_runner
+
+    # Set a global workspace (simulates production after set_workspace).
+    global_ws = tmp_path / "global-workspace"
+    global_ws.mkdir()
+    runner.set_workspace(global_ws)
+
+    # Record a worktree for the task.
+    from agent_hub.tasks.repository import TaskRepository
+    from agent_hub.tasks.worktree_repo import WorktreeRepository
+
+    repo = TaskRepository(runner.settings.database_path)
+    wt_repo = WorktreeRepository(runner.settings.database_path)
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    wt_path = tmp_path / "worktrees" / str(task.id)
+    wt_path.mkdir(parents=True)
+    await wt_repo.record(
+        task_id=task.id, path=str(wt_path), branch="task/x", base_branch="main",
+    )
+
+    # Critical: this mirrors how send() actually calls — cwd=self._cwd (non-None).
+    client = await runner._get_or_create_client("pm", task_id=task.id, cwd=global_ws)
+
+    # Worktree path must win.
+    assert client.options.cwd == str(wt_path)
+    # And NOT be the global workspace.
+    assert client.options.cwd != str(global_ws)
+
+
+@pytest.mark.asyncio
+async def test_no_task_id_uses_caller_cwd(patched_runner, tmp_path):
+    """When no task_id, caller-passed cwd is honoured."""
+    runner, _ = patched_runner
+    explicit = tmp_path / "explicit"
+    explicit.mkdir()
+    client = await runner._get_or_create_client("pm", task_id=None, cwd=explicit)
+    assert client.options.cwd == str(explicit)

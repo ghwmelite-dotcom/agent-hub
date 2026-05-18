@@ -152,3 +152,25 @@ async def test_cleanup_unknown_task_is_noop(manager_deps):
     manager, _, _ = manager_deps
     # Should not raise; no worktree to clean.
     await manager.cleanup(99999)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_handles_orphan_path_gone(manager_deps):
+    """If the worktree directory has been deleted out-of-band, cleanup
+    should still mark the DB row cleaned (no `git worktree remove`)."""
+    manager, repo, _ = manager_deps
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    created = await manager.create(task_id=task.id, title=task.title)
+
+    # Simulate orphan: delete the worktree directory directly.
+    import shutil
+    shutil.rmtree(created["path"])
+    assert not Path(created["path"]).exists()
+
+    # Cleanup should succeed, not raise.
+    await manager.cleanup(task.id)
+
+    from agent_hub.tasks.worktree_repo import WorktreeRepository
+    wt_repo = WorktreeRepository(manager.db_path)
+    row = await wt_repo.get_by_task(task.id)
+    assert row.cleaned_at is not None

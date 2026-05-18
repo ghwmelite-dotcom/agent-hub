@@ -186,14 +186,18 @@ class AgentRunner:
             if key in self._clients:
                 return self._clients[key]
 
-            # Resolve effective cwd: prefer recorded worktree for task_id,
-            # fall back to caller-supplied cwd, then to global workspace.
-            effective_cwd: Path | None = cwd
-            if task_id is not None and effective_cwd is None:
+            # Resolve effective cwd:
+            # 1. If task_id has a recorded (not-cleaned) worktree → use it.
+            # 2. Else if caller passed an explicit cwd → use it.
+            # 3. Else fall back to global workspace (self._cwd).
+            effective_cwd: Path | None = None
+            if task_id is not None:
                 wt_repo = WorktreeRepository(self.settings.database_path)
                 row = await wt_repo.get_by_task(task_id)
                 if row is not None and row.cleaned_at is None:
                     effective_cwd = Path(row.path)
+            if effective_cwd is None and cwd is not None:
+                effective_cwd = cwd
             if effective_cwd is None:
                 effective_cwd = self._cwd
 

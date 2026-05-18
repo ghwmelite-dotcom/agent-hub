@@ -82,14 +82,22 @@ class WorktreeManager:
     async def cleanup(self, task_id: int) -> None:
         """Remove the worktree from disk and mark cleaned_at.
 
-        Refuses to remove a dirty worktree (uncommitted changes) — the
-        agent's work is left in place for human inspection. The DB row
-        is NOT marked cleaned in that case so the orchestrator can flag
-        the task as blocked.
+        Refuses to remove a dirty worktree (uncommitted changes). If
+        the worktree path no longer exists on disk (orphan), runs
+        `git worktree prune` to clean git's internal records and marks
+        the row cleaned without invoking `git worktree remove`.
         """
         row = await self._repo.get_by_task(task_id)
         if row is None or row.cleaned_at is not None:
             return  # nothing to do
+
+        path_obj = Path(row.path)
+        if not path_obj.exists():
+            # Orphan — the directory is already gone. Prune git's
+            # internal worktree registry and mark cleaned.
+            await self._run_git("worktree", "prune")
+            await self._repo.mark_cleaned(task_id)
+            return
 
         # Check for uncommitted changes inside the worktree.
         proc = await asyncio.create_subprocess_exec(

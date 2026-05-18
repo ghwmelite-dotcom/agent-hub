@@ -61,6 +61,15 @@ class HandoffQueue:
             await conn.commit()
             return cur.lastrowid  # type: ignore[return-value]
 
+    async def count_pending(self) -> int:
+        """Lightweight count of unclaimed rows — for /status."""
+        async with self._connect() as conn:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM handoff_queue WHERE claimed_at IS NULL"
+            )
+            row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
     async def pending(self) -> list[HandoffRow]:
         async with self._connect() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
@@ -71,6 +80,23 @@ class HandoffQueue:
             )
             rows = await cur.fetchall()
         return [_row_to_model(r) for r in rows]
+
+    async def drop_pending_for_task(self, task_id: int) -> int:
+        """Delete unclaimed rows for `task_id`. Returns the row count.
+
+        Used by /cancel: when a user aborts a task, any pending handoffs
+        for it would otherwise still dispatch and waste agent turns.
+        Claimed rows are left alone — the agent is mid-turn and will
+        notice the task moved to BLOCKED on its next tool call.
+        """
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            cur = await conn.execute(
+                "DELETE FROM handoff_queue WHERE task_id = ? AND claimed_at IS NULL",
+                (task_id,),
+            )
+            await conn.commit()
+            return cur.rowcount or 0
 
     async def claim(self) -> HandoffRow | None:
         """Atomically claim the oldest unclaimed row, or None if queue empty.

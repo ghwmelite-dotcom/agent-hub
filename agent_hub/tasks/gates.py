@@ -72,6 +72,15 @@ class GateRepository:
             row = await cur.fetchone()
         return _row_to_gate(row) if row else None
 
+    async def count_unresolved(self) -> int:
+        """Count of gates still awaiting user resolution — for /status."""
+        async with self._connect() as conn:
+            cur = await conn.execute(
+                "SELECT COUNT(*) FROM gates WHERE resolved_at IS NULL"
+            )
+            row = await cur.fetchone()
+        return int(row[0]) if row else 0
+
     async def status(self, *, task_id: int, kind: str) -> str:
         """Returns 'pending' | 'approved' | 'rejected' | 'none'."""
         async with self._connect() as conn:

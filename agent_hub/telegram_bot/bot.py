@@ -87,14 +87,22 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await update.message.reply_text(
-        "Commands:\n"
-        "/start — show team + status\n"
+        "*Session*\n"
+        "/start — show team + workspace\n"
         "/agents — list the team\n"
         "/to <agent> — set who you're talking to (sticky)\n"
         "/reset <agent|all> — clear an agent's memory\n"
         "/workspace [path] — show or change the project folder\n"
-        "/projects — list recently-used project folders\n"
-        "/whoami — show your Telegram user ID and version\n\n"
+        "/projects — recently-used project folders\n"
+        "/whoami — your Telegram user ID + version\n\n"
+        "*Tasks*\n"
+        "/tasks — list active tasks\n"
+        "/task <id> — show one task in detail\n"
+        "/approve <id> — approve a design gate (worktree + handoff)\n"
+        "/reject <id> <reason> — reject a design with feedback\n"
+        "/cancel <id> — abort a running task\n"
+        "/resume <id> — resume a stale/blocked task\n"
+        "/status — orchestrator health snapshot\n\n"
         "Address an agent directly with `@name` (e.g. `@architect`, `@impl`)."
     )
 
@@ -364,7 +372,9 @@ def build_application(
     # Task-management commands (Tasks 9-13)
     # ------------------------------------------------------------------
     from agent_hub.telegram_bot.commands.approve_cmd import handle_approve
+    from agent_hub.telegram_bot.commands.cancel_cmd import handle_cancel
     from agent_hub.telegram_bot.commands.reject_cmd import handle_reject
+    from agent_hub.telegram_bot.commands.status_cmd import handle_status
     from agent_hub.telegram_bot.commands.tasks_cmd import handle_tasks
     from agent_hub.telegram_bot.commands.task_cmd import handle_task
     from agent_hub.telegram_bot.commands.resume_cmd import handle_resume
@@ -431,6 +441,26 @@ def build_application(
         reply = await handle_reject(task_id=task_id, reason=reason, db_path=db_path)
         await update.effective_chat.send_message(reply)
 
+    async def _on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        reply = await handle_status(db_path=db_path, runner=orchestrator.runner)
+        await update.effective_chat.send_message(reply)
+
+    async def _on_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await update.effective_chat.send_message("Usage: /cancel <id>")
+            return
+        try:
+            task_id = int(context.args[0])
+        except ValueError:
+            await update.effective_chat.send_message("Task id must be an integer.")
+            return
+        reply = await handle_cancel(
+            task_id=task_id,
+            db_path=db_path,
+            runner=orchestrator.runner,
+        )
+        await update.effective_chat.send_message(reply)
+
     async def _on_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if not context.args:
             await update.effective_chat.send_message("Usage: /resume <id>")
@@ -447,7 +477,9 @@ def build_application(
     app.add_handler(CommandHandler("task", _on_task))
     app.add_handler(CommandHandler("approve", _on_approve))
     app.add_handler(CommandHandler("reject", _on_reject))
+    app.add_handler(CommandHandler("cancel", _on_cancel))
     app.add_handler(CommandHandler("resume", _on_resume))
+    app.add_handler(CommandHandler("status", _on_status))
 
     # Catch-all — must come AFTER all CommandHandlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))

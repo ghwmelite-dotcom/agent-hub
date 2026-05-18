@@ -12,19 +12,43 @@ having to leave Telegram.
 
 ## The team
 
-| Role                    | What they do                                                              |
-| ----------------------- | ------------------------------------------------------------------------- |
-| **Senior PM**           | Default chat partner. Files tasks, sizes work, hands off to specialists. |
-| **Architect**           | Designs implementation before code is written. Requests the design gate. |
-| **Fullstack Engineer**  | Implements features in the per-task git worktree. (Opus 4.7 by default.) |
-| **Implementer**         | Lighter-weight code work; alternative to fullstack for narrow changes.   |
-| **Reviewer**            | Independent second pass on diffs, design choices, migrations.            |
-| **Researcher**          | Web search, library evaluation, documentation reading.                   |
-| **Senior UI/UX Designer** | Wireframes, design tokens, component decisions.                        |
-| **QA**                  | Runs tests, validates against spec, marks the task done.                 |
+| Role                      | What they do                                                              |
+| ------------------------- | ------------------------------------------------------------------------- |
+| **Senior PM**             | Default chat partner. Files tasks, sizes work, picks the right design + QA agent. |
+| **Architect**             | Designs implementation before code is written. Requests the design gate. (General engineering.) |
+| **Quant Strategist**      | Designs trading logic — signals, risk math, regime filters — for EA / MetaTrader / MQL tasks. Requests the design gate. |
+| **Fullstack Engineer**    | Implements features in the per-task git worktree. Loads MQL skills automatically on trading projects. (Opus 4.7 by default.) |
+| **Implementer**           | Lighter-weight code work; alternative to fullstack for narrow changes.   |
+| **Reviewer**              | Independent second pass on diffs, design choices, migrations.            |
+| **Researcher**            | Web search, library evaluation, documentation reading.                   |
+| **Senior UI/UX Designer** | Wireframes, design tokens, component decisions.                          |
+| **QA**                    | Runs tests, validates against spec, marks the task done.                 |
+| **Backtest Analyst**      | Validates statistical edge for EA tasks — equity curves, Monte Carlo, parameter robustness, overfit detection. Replaces QA on trading work. |
 
 Roles live in `agent_hub/agents/roles/*.yaml` — edit the system prompts, models,
 and tool allowlists without touching code.
+
+### Two parallel chains
+
+The team has two chains and PM picks which one runs per task.
+
+**Standard chain** (web, CLI, API, library, mobile, infra):
+
+```
+PM → Architect → /approve → Fullstack Engineer → Reviewer → QA → push
+```
+
+**EA chain** (trading, EA, MetaTrader, MQL, backtests):
+
+```
+PM → Quant Strategist → /approve → Fullstack Engineer → Reviewer → Backtest Analyst → push
+```
+
+PM detects EA tasks from keywords in the user's message AND from
+`Glob '**/*.mq{4,5}'` on the workspace, and prefixes the task title with
+`[EA]` so the reviewer can route the QA step to backtest-analyst instead of qa.
+You can force a chain manually by phrasing the task ("design an EA that…" vs
+"build a worker that…") or by addressing the agent directly (`@quant …`).
 
 ## How the loop runs
 

@@ -396,7 +396,17 @@ def build_application(
         except ValueError:
             await update.effective_chat.send_message("Task id must be an integer.")
             return
-        reply = await handle_approve(task_id=task_id, db_path=db_path)
+
+        # Workspace info needed for the worktree creation + handoff.
+        repo_root = settings.default_workspace
+        worktrees_root = repo_root.parent / "worktrees" if repo_root else None
+
+        reply = await handle_approve(
+            task_id=task_id,
+            db_path=db_path,
+            repo_root=repo_root,
+            worktrees_root=worktrees_root,
+        )
         await update.effective_chat.send_message(reply)
 
     async def _on_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

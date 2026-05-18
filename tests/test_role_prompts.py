@@ -58,6 +58,12 @@ EXPECTED_MCP_TOOLS: dict[str, list[str]] = {
         "mcp__agent_hub__tasks_update",
         "mcp__agent_hub__handoff",
     ],
+    "backtest-analyst": [
+        "mcp__agent_hub__tasks_get",
+        "mcp__agent_hub__tasks_comment",
+        "mcp__agent_hub__tasks_update",
+        "mcp__agent_hub__handoff",
+    ],
     "researcher": [
         "mcp__agent_hub__tasks_get",
         "mcp__agent_hub__tasks_comment",

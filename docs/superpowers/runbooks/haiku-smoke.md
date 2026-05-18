@@ -12,9 +12,14 @@ or after any change to:
 ## Prerequisites
 
 - `.venv` with `pip install -r requirements.txt` complete
-- `ANTHROPIC_API_KEY` set in your environment (you'll spend ~$0.10–0.50)
+- `ANTHROPIC_API_KEY` set in your environment (you'll spend ~$0.05–0.15 on
+  Haiku; ~$0.30–0.50 if temporarily un-pinned to Sonnet/Opus defaults)
 - Git on PATH
 - Working internet connection to api.anthropic.com
+
+The test seeds its own bare remote per run — no GitHub config needed. It
+also asserts the task branch lands on that remote (catches silent push
+regressions).
 
 ## Running
 
@@ -63,9 +68,11 @@ explicit about MUST CALL vs MAY DISCUSS.
 
 ## Cost expectations
 
-- Pure Haiku run: ~$0.10
-- With one or two retries from bad transitions: ~$0.30
-- A run that runs to the 4-min timeout: ~$0.50
+- Pure Haiku run: ~$0.05–0.10
+- With one or two retries from bad transitions: ~$0.15
+- Default-models run (Sonnet + Opus 4.7 for fullstack): ~$0.30–0.50
 
-If a run costs more than $1, kill it and investigate — that's a
-stuck-loop indicator.
+If a run costs more than $1, kill it and investigate — that's a stuck-loop
+indicator. The orchestrator's stuck-task watcher will also DM you when a
+task hits `STUCK_TURN_THRESHOLD` (default 12) handoff turns without a status
+change.

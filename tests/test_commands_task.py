@@ -38,6 +38,25 @@ async def test_task_unknown_returns_error(deps):
 
 
 @pytest.mark.asyncio
+async def test_task_shows_zero_spend_for_new_task(deps):
+    repo, db = deps
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    reply = await handle_task(task_id=task.id, db_path=db.path)
+    assert "Spent: $0" in reply
+
+
+@pytest.mark.asyncio
+async def test_task_shows_accumulated_spend(deps):
+    repo, db = deps
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    await repo.add_cost(task.id, 0.42)
+    await repo.add_cost(task.id, 0.18)
+
+    reply = await handle_task(task_id=task.id, db_path=db.path)
+    assert "Spent: $0.6000" in reply
+
+
+@pytest.mark.asyncio
 async def test_task_truncates_to_recent_20_events(deps):
     repo, db = deps
     task = await repo.create(title="x", description="-", origin_chat_id=1)

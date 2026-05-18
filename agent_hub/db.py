@@ -144,6 +144,17 @@ CREATE TABLE IF NOT EXISTS worktrees (
 """
 
 
+_SCHEMA_AGENT_SESSIONS = """
+CREATE TABLE IF NOT EXISTS agent_sessions (
+    agent_name TEXT NOT NULL,
+    task_id INTEGER NOT NULL DEFAULT 0,
+    session_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (agent_name, task_id)
+);
+"""
+
+
 class Database:
     """Thin async wrapper around an SQLite file."""
 
@@ -161,6 +172,7 @@ class Database:
             await conn.executescript(_SCHEMA_HANDOFF_QUEUE)
             await conn.executescript(_SCHEMA_GATES)
             await conn.executescript(_SCHEMA_WORKTREES)
+            await conn.executescript(_SCHEMA_AGENT_SESSIONS)
             await _migrate_gates_notified_at(conn)
             await _migrate_tasks_cost_total(conn)
             await conn.commit()

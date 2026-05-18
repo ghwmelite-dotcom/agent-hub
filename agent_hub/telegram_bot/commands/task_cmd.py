@@ -16,10 +16,16 @@ async def handle_task(*, task_id: int, db_path: Path) -> str:
     events = await repo.events(task_id, limit=20)
 
     owner_str = f" (owner: @{task.owner})" if task.owner else ""
+    cost_str = (
+        f"Spent: ${task.cost_usd_total:.4f}"
+        if task.cost_usd_total > 0
+        else "Spent: $0"
+    )
     lines = [
         f"*Task #{task.id}* — {task.title}",
         f"Status: {task.status.value}{owner_str}",
         f"Created: {task.created_at.isoformat()}",
+        cost_str,
         "",
         "Recent events:",
     ]

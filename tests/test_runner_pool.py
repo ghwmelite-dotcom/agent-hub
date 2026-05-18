@@ -186,3 +186,43 @@ async def test_no_task_id_uses_caller_cwd(patched_runner, tmp_path):
     explicit.mkdir()
     client = await runner._get_or_create_client("pm", task_id=None, cwd=explicit)
     assert client.options.cwd == str(explicit)
+
+
+@pytest.mark.asyncio
+async def test_runner_persists_session_id_per_agent_task(patched_runner):
+    """First call writes a session_id; second call (different runner
+    instance, same DB) reuses it — that's how restart-resume works."""
+    runner, created = patched_runner
+    c1 = await runner._get_or_create_client("pm", task_id=5, cwd=None)
+    sid1 = c1.options.session_id
+    assert sid1 is not None and len(sid1) == 36  # UUID
+
+    # Build a fresh runner against the same DB (simulates restart).
+    from agent_hub.agents.runner import AgentRunner
+    fresh_runner = AgentRunner(settings=runner.settings, registry=runner.registry)
+    c2 = await fresh_runner._get_or_create_client("pm", task_id=5, cwd=None)
+    assert c2.options.session_id == sid1
+
+
+@pytest.mark.asyncio
+async def test_runner_different_tasks_get_distinct_session_ids(patched_runner):
+    runner, _ = patched_runner
+    c5 = await runner._get_or_create_client("pm", task_id=5, cwd=None)
+    c7 = await runner._get_or_create_client("pm", task_id=7, cwd=None)
+    assert c5.options.session_id != c7.options.session_id
+
+
+@pytest.mark.asyncio
+async def test_reset_forgets_persisted_session(patched_runner):
+    """After reset(), the NEXT connect must generate a fresh UUID rather
+    than trying to resume the (presumably broken) old conversation."""
+    runner, _ = patched_runner
+    c1 = await runner._get_or_create_client("pm", task_id=5, cwd=None)
+    sid1 = c1.options.session_id
+
+    await runner.reset("pm", task_id=5)
+
+    # Same runner, but reset cleared both the in-memory client and the
+    # persisted session. Next connect generates a new UUID.
+    c2 = await runner._get_or_create_client("pm", task_id=5, cwd=None)
+    assert c2.options.session_id != sid1

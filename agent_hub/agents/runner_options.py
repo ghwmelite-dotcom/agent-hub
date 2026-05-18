@@ -48,8 +48,19 @@ def build_mcp_server_config(db_path: Path) -> dict[str, Any]:
     }
 
 
-def build_sdk_options(role: AgentRole, *, cwd: Path | None, db_path: Path) -> Any:
+def build_sdk_options(
+    role: AgentRole,
+    *,
+    cwd: Path | None,
+    db_path: Path,
+    session_id: str | None = None,
+) -> Any:
     """Construct a ClaudeAgentOptions for the given role + workspace.
+
+    `session_id` (when set) pins the conversation to a known UUID so a
+    later reconnect can pick up where it left off — the Claude Code CLI
+    persists conversation history per session_id. Pass the value
+    returned by AgentSessionStore.get_or_create.
 
     Returns the SDK's options object (whose exact class lives in
     claude_agent_sdk). Keeping the SDK import lazy here so test-time
@@ -73,13 +84,16 @@ def build_sdk_options(role: AgentRole, *, cwd: Path | None, db_path: Path) -> An
     #   allowed_tools           — broader allowlist (built-in + MCP names) for
     #                              permission gating.
     builtin_tools = [t for t in role.allowed_tools if not t.startswith("mcp__")]
-    return sdk.ClaudeAgentOptions(
-        system_prompt=role.system_prompt,
-        tools=builtin_tools,
-        allowed_tools=role.allowed_tools,
-        setting_sources=[],
-        skills=[],
-        model=role.model,
-        cwd=str(cwd) if cwd else None,
-        mcp_servers=build_mcp_server_config(db_path),
-    )
+    kwargs: dict[str, Any] = {
+        "system_prompt": role.system_prompt,
+        "tools": builtin_tools,
+        "allowed_tools": role.allowed_tools,
+        "setting_sources": [],
+        "skills": [],
+        "model": role.model,
+        "cwd": str(cwd) if cwd else None,
+        "mcp_servers": build_mcp_server_config(db_path),
+    }
+    if session_id is not None:
+        kwargs["session_id"] = session_id
+    return sdk.ClaudeAgentOptions(**kwargs)

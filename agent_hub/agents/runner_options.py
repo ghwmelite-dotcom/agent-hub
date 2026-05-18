@@ -37,9 +37,20 @@ def build_sdk_options(role: AgentRole, *, cwd: Path | None, db_path: Path) -> An
     """
     import claude_agent_sdk as sdk
 
+    # Isolation: the SDK is designed for Claude Code, so by default it
+    # exposes Claude Code's full toolset AND loads the user's CLAUDE.md /
+    # skills configs. Both pollute our agent's behavior — agents prefer
+    # familiar Claude Code tools (TaskCreate, Agent subagent dispatcher,
+    # etc.) over our mcp__agent_hub__* tools. We force isolation with:
+    #   tools=role.allowed_tools     — explicit tool list, agent sees nothing else
+    #   setting_sources=[]            — skip user/project/local config
+    #   skills=[]                     — skip global skill loading
     return sdk.ClaudeAgentOptions(
         system_prompt=role.system_prompt,
+        tools=role.allowed_tools,
         allowed_tools=role.allowed_tools,
+        setting_sources=[],
+        skills=[],
         model=role.model,
         cwd=str(cwd) if cwd else None,
         mcp_servers=build_mcp_server_config(db_path),

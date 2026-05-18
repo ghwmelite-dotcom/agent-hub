@@ -51,18 +51,14 @@ async def main() -> int:
     await db.init()
     repo = TaskRepository(db_path)
 
-    # Seed a task so PM has something concrete to act on. This mirrors
-    # what the smoke test does (we pre-create the task, then send PM a
-    # handoff message that references it).
-    task = await repo.create(
-        title="Add hello line to README",
-        description=(
-            "Append a single line `Hello agent team.` to README.md "
-            "in this repo. This is a diagnostic - keep the change minimal."
-        ),
-        origin_chat_id=999,
-    )
-    print(f"=== seeded task #{task.id}", flush=True)
+    # Simulate the REAL user-message flow:
+    # User types "@pm append 'Hello' to README" in Telegram → router strips
+    # the @pm and calls runner.send("pm", raw_text). No pre-created task,
+    # no routing prefix. PM should call mcp__agent_hub__tasks_create first.
+    # Seed a README so the agent has somewhere to work even if it tries
+    # to inspect the project before handing off.
+    (tmp / "README.md").write_text("# Smoke project\n\nA tiny test target.\n")
+    print("=== seeded README.md in workspace", flush=True)
 
     registry = AgentRegistry.load()
     pm_role = registry.get("pm")
@@ -73,24 +69,34 @@ async def main() -> int:
     print(f"=== PM system_prompt length: {len(pm_role.system_prompt)} chars", flush=True)
 
     runner = AgentRunner(settings=settings, registry=registry)
-    routed = (
-        f"[task #{task.id}, from @user] "
-        f"User filed task #{task.id}: append 'Hello agent team.' to README.md"
+    # Realistic user-message: route prefix carries chat_id so PM can
+    # pass origin_chat_id to mcp__agent_hub__tasks_create. The production
+    # router needs to do this same prepend (currently doesn't — TODO).
+    user_message = (
+        "[chat_id=12345] Append the line 'Hello agent team.' to README.md."
     )
-    print(f"\n=== sending to PM:\n{routed}\n", flush=True)
+    print(f"\n=== sending to PM (no task_id, no prefix):\n{user_message}\n", flush=True)
     print("=== events:", flush=True)
 
     try:
-        async for event in runner.send("pm", routed, task_id=task.id):
+        async for event in runner.send("pm", user_message, task_id=None):
             if isinstance(event, TextChunk):
                 print(f"[TEXT] {event.text!r}", flush=True)
             elif isinstance(event, ToolStart):
                 tool = event.tool
-                inp = repr(event.input)[:200]
-                print(f"[TOOL_START] {tool}  input={inp}", flush=True)
+                # Print FULL input — truncation was hiding the bug.
+                print(f"[TOOL_START] {tool}  input={event.input!r}", flush=True)
             elif isinstance(event, ToolEnd):
                 marker = "ERR" if event.is_error else "OK"
-                print(f"[TOOL_END/{marker}] tool={event.tool!r}", flush=True)
+                # Try to dig out the underlying tool result message
+                # (SDK may attach it as a `content` or `output` attribute).
+                extra = ""
+                for attr in ("content", "output", "result", "message"):
+                    val = getattr(event, attr, None)
+                    if val:
+                        extra = f"  {attr}={val!r}"
+                        break
+                print(f"[TOOL_END/{marker}] tool={event.tool!r}{extra}", flush=True)
             elif isinstance(event, TurnDone):
                 cost = f"${event.cost_usd:.4f}" if event.cost_usd is not None else "?"
                 dur = f"{event.duration_ms}ms" if event.duration_ms is not None else "?"
@@ -110,17 +116,15 @@ async def main() -> int:
     for h in pending:
         print(f"    to={h.to_agent} from={h.from_agent} msg={h.message[:80]!r}", flush=True)
 
-    # Did PM update the task status?
-    final = await repo.get(task.id)
-    print(f"=== task #{task.id} final status: {final.status.value}", flush=True)
-    print(f"=== task #{task.id} owner: {final.owner}", flush=True)
-
-    # Recent events on the task (status_change, comments) — did PM call tasks.update / tasks.comment?
-    events = await repo.events(task.id)
-    print(f"=== task #{task.id} events ({len(events)}):", flush=True)
-    for ev in events:
-        body_repr = repr(ev.payload)[:120]
-        print(f"    {ev.actor} {ev.kind}: {body_repr}", flush=True)
+    # Did PM call tasks.create? If so, find the new task and dump its state.
+    all_tasks = await repo.list()
+    print(f"=== tasks in DB after PM turn: {len(all_tasks)}", flush=True)
+    for t in all_tasks:
+        print(f"    #{t.id} status={t.status.value} owner={t.owner} title={t.title!r}", flush=True)
+        events = await repo.events(t.id)
+        for ev in events:
+            body_repr = repr(ev.payload)[:120]
+            print(f"      event @{ev.actor} {ev.kind}: {body_repr}", flush=True)
 
     return 0
 

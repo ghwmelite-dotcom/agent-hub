@@ -30,7 +30,7 @@ def build_server() -> FastMCP:
 
     Kept as a function so tests can build a fresh server per case.
     """
-    server = FastMCP("agent-hub")
+    server = FastMCP("agent_hub")
     db_path = _resolve_db_path()
 
     # Tool registration happens in submodules so each tool family is

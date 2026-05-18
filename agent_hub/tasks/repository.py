@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 import aiosqlite
 
@@ -25,17 +26,17 @@ def _parse_dt(s: str) -> datetime:
 
 def _row_to_task(row: aiosqlite.Row) -> Task:
     return Task(
-        id=row[0],
-        parent_id=row[1],
-        title=row[2],
-        description=row[3],
-        status=TaskStatus(row[4]),
-        owner=row[5],
-        worktree_path=row[6],
-        branch_name=row[7],
-        origin_chat_id=row[8],
-        created_at=_parse_dt(row[9]),
-        updated_at=_parse_dt(row[10]),
+        id=row["id"],
+        parent_id=row["parent_id"],
+        title=row["title"],
+        description=row["description"],
+        status=TaskStatus(row["status"]),
+        owner=row["owner"],
+        worktree_path=row["worktree_path"],
+        branch_name=row["branch_name"],
+        origin_chat_id=row["origin_chat_id"],
+        created_at=_parse_dt(row["created_at"]),
+        updated_at=_parse_dt(row["updated_at"]),
     )
 
 
@@ -49,18 +50,14 @@ class TaskRepository:
     def __init__(self, db_path: Path):
         self.db_path = db_path
 
-    def _connect(self) -> aiosqlite.Connection:
-        """Return an aiosqlite Connection context-manager (not yet awaited).
+    def _connect(self) -> Any:
+        """Open a fresh connection with FK enforcement + named-row access.
 
-        Usage::
-
-            async with self._connect() as conn:
-                ...
-
-        Note: do NOT ``await self._connect()`` — aiosqlite.connect() returns
-        a Connection that is itself an async context manager.  Awaiting it
-        starts the background thread; entering it via ``async with`` also
-        starts it, so double-starting raises RuntimeError on Python 3.14+.
+        NOTE: do NOT `await self._connect()`. aiosqlite.connect() is both
+        awaitable and an async context manager. On Python 3.14, awaiting
+        then entering raises RuntimeError ('threads can only be started
+        once'). Always use `async with self._connect() as conn:` with no
+        await, then PRAGMA + row_factory inside the block.
         """
         return aiosqlite.connect(self.db_path)
 
@@ -76,6 +73,7 @@ class TaskRepository:
         now = _utcnow_iso()
         async with self._connect() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
             cur = await conn.execute(
                 "INSERT INTO tasks "
                 "(parent_id, title, description, status, owner, origin_chat_id, created_at, updated_at) "
@@ -90,6 +88,7 @@ class TaskRepository:
     async def get(self, task_id: int) -> Task | None:
         async with self._connect() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
             cur = await conn.execute(
                 f"SELECT {_TASK_COLS} FROM tasks WHERE id = ?", (task_id,),
             )

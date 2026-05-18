@@ -46,14 +46,18 @@ TELEGRAM_BOT_TOKEN=7891234567:AAH-...
 TELEGRAM_ALLOWED_USER_ID=12345678
 ```
 
-Anthropic (one of):
+Anthropic auth — pick one:
 
 ```ini
-# Option A: explicit API key
-ANTHROPIC_API_KEY=sk-ant-api03-...
+# Recommended for Claude Code subscribers — no per-token API billing.
+# The bot scrubs ANTHROPIC_API_KEY from its env at startup so the SDK
+# can't fall back to per-token billing. Run `claude auth login` first
+# so the OAuth tokens are cached.
+ANTHROPIC_AUTH_MODE=subscription
 
-# Option B: omit and let the SDK use the Claude Code CLI's cached creds
-# Make sure `claude auth login` has been run on this machine.
+# Or pay per-token via the API:
+# ANTHROPIC_AUTH_MODE=api_key
+# ANTHROPIC_API_KEY=sk-ant-api03-...
 ```
 
 Workspace allowlist (point at a project that has `origin`):

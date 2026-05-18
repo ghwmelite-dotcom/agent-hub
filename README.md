@@ -75,8 +75,20 @@ notepad .env
 
 Required: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`.
 
-For Anthropic auth, either set `ANTHROPIC_API_KEY` or sign in via the Claude
-Code CLI (`claude auth login`) and the SDK reuses those credentials.
+### Auth: subscription vs API key
+
+By default `ANTHROPIC_AUTH_MODE=subscription`, which means the bot uses your
+**Claude Code subscription** (whatever account you signed into via
+`claude auth login`) and **does not bill per-token via the API**. To prevent
+accidents the bot actively scrubs `ANTHROPIC_API_KEY` from its environment at
+startup, even if you have one in `.env`.
+
+If you'd rather pay per-token, set `ANTHROPIC_AUTH_MODE=api_key` and fill in
+`ANTHROPIC_API_KEY`. The bot will refuse to start if the key is missing in
+that mode (saves you from a silently-broken setup).
+
+`ANTHROPIC_AUTH_MODE=auto` is the historical behavior: API key if present,
+else subscription. Handy for setups that flip between the two.
 
 ### 5. Point at a project that can push to origin
 

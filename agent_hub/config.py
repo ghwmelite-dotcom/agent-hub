@@ -17,6 +17,7 @@ load_dotenv(_PROJECT_ROOT / ".env")
 
 Autonomy = Literal["low", "medium", "high"]
 WorkspaceMode = Literal["allowlist", "open"]
+AuthMode = Literal["subscription", "api_key", "auto"]
 
 
 class Settings(BaseModel):
@@ -31,6 +32,7 @@ class Settings(BaseModel):
     # Anthropic
     anthropic_api_key: str | None = None
     agent_default_model: str = "claude-sonnet-4-6"
+    anthropic_auth_mode: AuthMode = "subscription"
 
     # Workspaces
     agent_workspaces: list[Path] = Field(default_factory=list)
@@ -106,6 +108,7 @@ def load_settings() -> Settings:
         telegram_bot_token=_required("TELEGRAM_BOT_TOKEN"),
         telegram_allowed_user_id=int(_required("TELEGRAM_ALLOWED_USER_ID")),
         anthropic_api_key=os.getenv("ANTHROPIC_API_KEY") or None,
+        anthropic_auth_mode=os.getenv("ANTHROPIC_AUTH_MODE", "subscription"),  # type: ignore[arg-type]
         agent_default_model=os.getenv("AGENT_DEFAULT_MODEL", "claude-sonnet-4-6"),
         agent_workspaces=os.getenv("AGENT_WORKSPACES", ""),
         workspace_mode=os.getenv("AGENT_WORKSPACE_MODE", "open"),  # type: ignore[arg-type]

@@ -29,3 +29,30 @@ def test_acquire_refuses_when_live_pid_holds_it(tmp_path: Path):
     with pytest.raises(LockHeld) as exc:
         lock.acquire()
     assert str(os.getpid()) in str(exc.value)
+
+
+def test_acquire_steals_when_stale_pid(tmp_path: Path, monkeypatch):
+    """If the recorded PID is dead, the lock is stolen."""
+    lock_path = tmp_path / ".orchestrator.lock"
+    lock_path.write_text("999999999")  # vanishingly unlikely to be alive
+    monkeypatch.setattr("psutil.pid_exists", lambda pid: False)  # force dead
+
+    lock = OrchestratorLock(lock_path)
+    lock.acquire()
+    try:
+        assert lock_path.read_text().strip() == str(os.getpid())
+    finally:
+        lock.release()
+
+
+def test_acquire_steals_when_garbage_contents(tmp_path: Path):
+    """If the lock file is unreadable as a PID, steal it (treat as stale)."""
+    lock_path = tmp_path / ".orchestrator.lock"
+    lock_path.write_text("not-a-number")
+
+    lock = OrchestratorLock(lock_path)
+    lock.acquire()
+    try:
+        assert lock_path.read_text().strip() == str(os.getpid())
+    finally:
+        lock.release()

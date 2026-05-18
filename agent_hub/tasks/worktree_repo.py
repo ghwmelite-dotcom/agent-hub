@@ -67,3 +67,27 @@ class WorktreeRepository:
             )
             row = await cur.fetchone()
         return _row_to_worktree(row) if row else None
+
+    async def mark_cleaned(self, task_id: int) -> None:
+        """Set cleaned_at to now. Idempotent — second call is a no-op."""
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            await conn.execute(
+                "UPDATE worktrees SET cleaned_at = ? "
+                "WHERE task_id = ? AND cleaned_at IS NULL",
+                (_utcnow_iso(), task_id),
+            )
+            await conn.commit()
+
+    async def list_active(self) -> list[Worktree]:
+        """All worktrees whose cleaned_at IS NULL (i.e. still on disk)."""
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                f"SELECT {_COLS} FROM worktrees WHERE cleaned_at IS NULL "
+                "ORDER BY task_id ASC"
+            )
+            rows = await cur.fetchall()
+        return [_row_to_worktree(r) for r in rows]

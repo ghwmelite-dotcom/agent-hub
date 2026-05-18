@@ -190,15 +190,10 @@ class AgentRunner:
             # fall back to caller-supplied cwd, then to global workspace.
             effective_cwd: Path | None = cwd
             if task_id is not None and effective_cwd is None:
-                try:
-                    wt_repo = WorktreeRepository(self.settings.database_path)
-                    row = await wt_repo.get_by_task(task_id)
-                    if row is not None and row.cleaned_at is None:
-                        effective_cwd = Path(row.path)
-                except Exception:  # noqa: BLE001
-                    # DB not yet initialised or worktrees table missing —
-                    # fall through to the global workspace default.
-                    pass
+                wt_repo = WorktreeRepository(self.settings.database_path)
+                row = await wt_repo.get_by_task(task_id)
+                if row is not None and row.cleaned_at is None:
+                    effective_cwd = Path(row.path)
             if effective_cwd is None:
                 effective_cwd = self._cwd
 

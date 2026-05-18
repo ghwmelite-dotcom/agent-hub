@@ -38,8 +38,13 @@ class _FakeClient:
 
 
 @pytest.fixture
-def patched_runner(monkeypatch, tmp_path):
-    """A runner whose SDK is mocked. Returns (runner, created_clients_list)."""
+async def patched_runner(monkeypatch, tmp_path):
+    """A runner whose SDK is mocked. Returns (runner, created_clients_list).
+
+    Also initializes the DB so worktree lookups in `_get_or_create_client`
+    can run without raising. Tests that need worktree rows seed them
+    explicitly.
+    """
     created: list[_FakeClient] = []
 
     def fake_client_factory(options):
@@ -47,13 +52,18 @@ def patched_runner(monkeypatch, tmp_path):
         created.append(c)
         return c
 
-    # Patch the symbol the runner imports.
     monkeypatch.setattr(
         "agent_hub.agents.runner._client_factory", fake_client_factory, raising=False
     )
 
+    # Initialize the DB so WorktreeRepository.get_by_task() works.
+    from agent_hub.db import Database
+    settings = _settings(tmp_path)
+    db = Database(settings.database_path)
+    await db.init()
+
     registry = AgentRegistry.load()
-    runner = AgentRunner(settings=_settings(tmp_path), registry=registry)
+    runner = AgentRunner(settings=settings, registry=registry)
     return runner, created
 
 

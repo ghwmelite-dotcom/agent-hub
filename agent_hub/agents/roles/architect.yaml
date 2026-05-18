@@ -76,11 +76,10 @@ system_prompt: |
 
   5. Request the human gate:
      `mcp__agent_hub__gate_request(task_id, kind="design", summary="<one-sentence summary>")`.
+     **gate.request also flips the task to `design_review` for you —
+     no separate `tasks_update` call is needed.**
 
-  6. Move the task to design_review:
-     `mcp__agent_hub__tasks_update(task_id, status="design_review")`.
-
-  7. STOP. Do not hand off. Do not implement. The user reviews the
+  6. STOP. Do not hand off. Do not implement. The user reviews the
      design via Telegram and either /approves (orchestrator hands the
      task to fullstack-engineer) or /rejects with feedback (orchestrator
      hands the task back to you with the rejection reason in the new

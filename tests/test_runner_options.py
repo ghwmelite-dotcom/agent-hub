@@ -53,3 +53,20 @@ def test_build_sdk_options_includes_mcp_servers(tmp_path: Path):
     # mcp_servers must include the agent_hub entry.
     assert "agent_hub" in opts.mcp_servers
     assert opts.mcp_servers["agent_hub"]["env"]["AGENT_HUB_DB"] == str(db_path)
+
+
+def test_build_sdk_options_passes_session_id_when_provided(tmp_path: Path):
+    """session_id pinning lets the CLI re-open the same conversation
+    after a restart — essential for per-task resume."""
+    role = _role()
+    sid = "11111111-2222-3333-4444-555555555555"
+    opts = build_sdk_options(
+        role, cwd=None, db_path=tmp_path / "x.db", session_id=sid,
+    )
+    assert opts.session_id == sid
+
+
+def test_build_sdk_options_omits_session_id_by_default(tmp_path: Path):
+    role = _role()
+    opts = build_sdk_options(role, cwd=None, db_path=tmp_path / "x.db")
+    assert opts.session_id is None

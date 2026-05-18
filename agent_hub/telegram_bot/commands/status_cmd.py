@@ -39,6 +39,7 @@ async def handle_status(
 
     pending_handoffs = await queue.count_pending()
     unresolved_gates = await gates.count_unresolved()
+    total_cost = await repo.total_cost_usd()
 
     counts: dict[TaskStatus, int] = {}
     for status in _REPORT_ORDER:
@@ -55,6 +56,7 @@ async def handle_status(
         lines.append(f"Active agent sessions: {sessions}")
     lines.append(f"Handoff queue (pending): {pending_handoffs}")
     lines.append(f"Unresolved design gates: {unresolved_gates}")
+    lines.append(f"Cumulative spend: ${total_cost:.4f}")
 
     active_total = sum(counts[s] for s in _REPORT_ORDER if s != TaskStatus.BLOCKED)
     blocked = counts[TaskStatus.BLOCKED]

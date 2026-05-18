@@ -2,35 +2,60 @@
 
 A team of specialized Claude agents you manage over Telegram. The agents run
 locally on your machine using the Claude Agent SDK (the same engine that powers
-Claude Code), so they have real filesystem, git, and shell access to any
-project folder you whitelist.
+Claude Code), so they have real filesystem, git, and shell access to whatever
+project folder you point them at.
+
+File a task in chat → architect designs → you `/approve` → fullstack-engineer
+commits in an isolated git worktree → reviewer signs off → QA verifies → the
+branch is pushed to your `origin`. The whole loop runs end-to-end without you
+having to leave Telegram.
 
 ## The team
 
-| Role            | What they do                                                              |
-| --------------- | ------------------------------------------------------------------------- |
-| **Senior PM**   | Default chat partner. Owns the PRD, breaks work into tasks, runs standups, decides what ships. |
-| **Architect**   | Designs implementation approach before code is written.                   |
-| **Implementer** | Writes code. Can run in parallel for independent tasks.                   |
-| **Reviewer**    | Independent second pass on diffs, design choices, migrations.             |
-| **Researcher**  | Web search, library evaluation, documentation reading.                    |
-| **QA**          | Runs tests, validates against spec, takes screenshots.                    |
+| Role                    | What they do                                                              |
+| ----------------------- | ------------------------------------------------------------------------- |
+| **Senior PM**           | Default chat partner. Files tasks, sizes work, hands off to specialists. |
+| **Architect**           | Designs implementation before code is written. Requests the design gate. |
+| **Fullstack Engineer**  | Implements features in the per-task git worktree. (Opus 4.7 by default.) |
+| **Implementer**         | Lighter-weight code work; alternative to fullstack for narrow changes.   |
+| **Reviewer**            | Independent second pass on diffs, design choices, migrations.            |
+| **Researcher**          | Web search, library evaluation, documentation reading.                   |
+| **Senior UI/UX Designer** | Wireframes, design tokens, component decisions.                        |
+| **QA**                  | Runs tests, validates against spec, marks the task done.                 |
 
-Roles are defined in `agent_hub/agents/roles/*.yaml` — edit the system prompts
+Roles live in `agent_hub/agents/roles/*.yaml` — edit the system prompts, models,
 and tool allowlists without touching code.
+
+## How the loop runs
+
+1. You `@pm <ask>` — PM files a task and hands off to the architect.
+2. Architect reads the codebase, posts a design as a task comment, requests the
+   design gate (which moves the task to `design_review`).
+3. You reply `/approve <task_id>` (or `/reject <task_id> <reason>`).
+4. `/approve` creates a git worktree at `<repo_root>/../worktrees/<task_id>/` on
+   branch `task/<id>-<slug>` and hands off to fullstack-engineer.
+5. Fullstack commits in the worktree, hands off to reviewer.
+6. Reviewer signs off (or kicks back to fullstack), then hands off to QA.
+7. QA verifies and marks the task `done`.
+8. Orchestrator pushes the branch to `origin` and DMs you the result.
+
+Every handoff is persisted in SQLite, so the orchestrator survives restart
+mid-task without losing position. The agent-side conversation history is
+re-attached to the same SDK session UUID on reconnect — agents pick up where
+they left off rather than starting fresh.
 
 ## Quick start
 
 ### 1. Create a Telegram bot
 
-1. Open Telegram, search for `@BotFather` (the official one has a blue check).
-2. Send `/newbot`, give it a display name and a unique username ending in `bot`.
-3. Save the token BotFather gives you (looks like `7891234567:AAH-xxxxx...`).
+- Open Telegram, search for `@BotFather` (look for the blue check).
+- Send `/newbot`, pick a display name and a username ending in `bot`.
+- Save the token (looks like `7891234567:AAH-xxxxx...`).
 
 ### 2. Find your Telegram user ID
 
-Message `@userinfobot` on Telegram — it replies with your numeric ID. The bot
-will refuse messages from anyone else, so only you can drive your agents.
+Message `@userinfobot` — it replies with your numeric ID. The bot refuses
+messages from anyone else, so only you can drive it.
 
 ### 3. Install
 
@@ -48,58 +73,144 @@ copy .env.example .env
 notepad .env
 ```
 
-Fill in `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, and (optionally)
-`ANTHROPIC_API_KEY`. If you're already signed into Claude Code on this machine,
-the SDK will reuse those credentials and no API key is needed.
+Required: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`.
 
-### 5. Run
+For Anthropic auth, either set `ANTHROPIC_API_KEY` or sign in via the Claude
+Code CLI (`claude auth login`) and the SDK reuses those credentials.
+
+### 5. Point at a project that can push to origin
+
+The `/approve` flow runs `git push origin <branch>` at the end of every task.
+Make sure your workspace has an `origin` configured:
+
+```powershell
+cd C:\dev\your-project
+git remote -v  # should list origin
+```
+
+If origin is missing, `/approve` refuses the task with a friendly error before
+agents spend any tokens.
+
+Add the workspace to `.env`:
+
+```ini
+AGENT_WORKSPACES=C:\dev\your-project
+AGENT_WORKSPACE_MODE=allowlist
+```
+
+Or run in `open` mode to allow `/workspace <path>` to point anywhere:
+
+```ini
+AGENT_WORKSPACE_MODE=open
+```
+
+### 6. Run
 
 ```powershell
 python -m agent_hub
 ```
 
-Or just double-click `run.bat`.
+Or double-click `run.bat`.
 
-Open Telegram, find your bot, send `/start`. The PM will greet you.
+In Telegram, find your bot, send `/start`. The PM will greet you.
 
 ## Talking to the team
 
 - **Default messages** go to the PM.
-- **Address an agent directly** with `@architect`, `@impl`, `@reviewer`, `@research`, `@qa`.
-- **Slash commands:**
-  - `/start` — wake the bot, show help
-  - `/agents` — list the team
-  - `/status` — what each agent is currently working on
-  - `/standup` — PM polls every agent and summarizes
-  - `/workspace <path>` — switch which project folder agents work in
-  - `/reset <agent>` — clear an agent's memory and start fresh
+- **Address anyone directly** with `@architect`, `@fullstack`, `@reviewer`,
+  `@research`, `@designer`, `@qa`.
 
-## Autonomy levels
+### Slash commands
 
-Set `PM_AUTONOMY` in `.env`:
+**Session**
+- `/start` — wake the bot, show team + workspace
+- `/agents` — list the team
+- `/to <agent>` — set who you're talking to (sticky)
+- `/reset <agent|all>` — clear an agent's memory
+- `/workspace [path]` — show or change the project folder
+- `/projects` — recently-used project folders
+- `/whoami` — your Telegram user ID + version
 
-- `low` — every step requires explicit approval. Slowest, safest.
-- `medium` (default) — PM proposes a plan, waits for your OK, then executes.
-- `high` — PM runs workstreams autonomously. Only asks on destructive ops or big architectural decisions.
+**Tasks**
+- `/tasks` — list active tasks
+- `/task <id>` — show one task in detail (status, owner, spend, recent events)
+- `/approve <id>` — approve a design gate (creates worktree + hands to fullstack)
+- `/reject <id> <reason>` — reject a design and send the architect back with feedback
+- `/cancel <id>` — abort a running task (drops pending handoffs, resets agent session)
+- `/resume <id>` — resume a stale or blocked task
+- `/status` — orchestrator health snapshot (queue depth, gates, sessions, spend)
+- `/budget [amount|off]` — view, set, or disable the cumulative spend cap
+- `/help` — list all commands
+
+## Budget control
+
+By default there's no cap and you pay for whatever the agents consume. Set one:
+
+```
+/budget 5.00
+```
+
+When cumulative spend exceeds the cap, the orchestrator pauses handoff dispatch
+and DMs you once. Raise it (`/budget 10.00`) or remove it (`/budget off`) to
+resume. Active tasks are NOT cancelled — they just pause between turns.
+
+Check current spend any time with `/status` or `/budget`.
+
+## What's safe
+
+- `AGENT_WORKSPACES` (in `allowlist` mode) is an explicit allowlist. Agents
+  can't read or write outside those folders.
+- Bash commands run through the SDK's permission system; tighten or loosen per
+  role via each YAML's `allowed_tools`.
+- The bot only responds to `TELEGRAM_ALLOWED_USER_ID`.
+- Direct commits on `main` are not the workflow — every task gets its own
+  `task/<id>-<slug>` branch in an isolated worktree.
+
+## Surviving restart
+
+- The single-instance lock at `data/agent_hub.lock` prevents two orchestrators
+  from running at once (psutil liveness check; stale locks are stolen safely).
+- On boot, the orchestrator releases any handoff rows claimed by a dead
+  previous process (scoped to non-terminal tasks — DONE/BLOCKED audit trail is
+  preserved).
+- Design gates already DM'd to you stay quiet on restart (`gates.notified_at`).
+- Stale in-flight tasks get a one-shot DM with `/resume` prompts.
+- Each (agent, task_id) has a persistent SDK session UUID, so agents re-attach
+  to their prior conversation rather than starting fresh.
+
+## Concurrency
+
+`HANDOFF_WORKER_COUNT` (default 3) controls how many handoffs dispatch in
+parallel. Per-(agent, task_id) ordering is preserved by the runner pool lock,
+so workers safely race on the queue.
 
 ## Where things live
 
 ```
 agent-hub/
-├── agent_hub/              # The Python package
+├── agent_hub/                        # The Python package
 │   ├── agents/
-│   │   ├── roles/          # YAML role definitions — edit freely
-│   │   └── runner.py       # Claude Agent SDK wrapper
-│   ├── orchestrator/       # Routing + approvals
-│   └── telegram_bot/       # Telegram frontend
-├── data/                   # SQLite + agent state (gitignored)
-└── logs/                   # Runtime logs (gitignored)
+│   │   ├── roles/                    # YAML role definitions — edit freely
+│   │   ├── runner.py                 # Claude Agent SDK wrapper + client pool
+│   │   ├── runner_options.py         # ClaudeAgentOptions builder
+│   │   └── session_store.py          # (agent, task_id) → session_id persistence
+│   ├── mcp_server/                   # MCP tools the agents call
+│   │   └── tools/                    #   tasks.* handoff gate.* worktree.*
+│   ├── orchestrator/                 # Routing + tick loops + push
+│   ├── telegram_bot/                 # Telegram frontend + command handlers
+│   └── tasks/                        # Repositories (tasks, gates, handoffs, worktrees)
+├── data/                             # SQLite + lock file (gitignored)
+├── docs/superpowers/                 # Specs, plans, runbooks
+└── tests/                            # Unit, integration, smoke (267 + smoke)
 ```
 
-## Safety notes
+## Running the smoke test
 
-- `AGENT_WORKSPACES` is an explicit allowlist — agents can't read or write
-  outside those folders.
-- Bash commands run through the Agent SDK's permission system; you can require
-  approval for any tool in each role's YAML.
-- The bot only responds to your `TELEGRAM_ALLOWED_USER_ID`.
+```powershell
+$env:RUN_SMOKE_TESTS = "1"
+.venv\Scripts\python.exe -m pytest tests/smoke/ -v -s
+```
+
+Drives the full chain (PM → architect → /approve → fullstack → reviewer → QA →
+push) on a temporary repo using Haiku-pinned roles. Real Anthropic API calls,
+~$0.05–0.10 per run, completes in ~3 minutes.

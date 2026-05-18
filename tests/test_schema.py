@@ -32,7 +32,10 @@ async def test_tasks_table_columns(temp_db_path):
 async def test_all_new_tables_exist(temp_db_path):
     db = Database(temp_db_path)
     await db.init()
-    expected = {"tasks", "task_events", "handoff_queue", "gates", "worktrees"}
+    expected = {
+        "tasks", "task_events", "handoff_queue", "gates", "worktrees",
+        "agent_sessions",
+    }
     async with aiosqlite.connect(temp_db_path) as conn:
         rows = await (await conn.execute(
             "SELECT name FROM sqlite_master WHERE type='table'"

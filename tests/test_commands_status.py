@@ -41,6 +41,19 @@ async def test_status_empty_db(deps):
     assert "Handoff queue (pending): 0" in reply
     assert "Unresolved design gates: 0" in reply
     assert "Tasks active: 0" in reply
+    assert "Cumulative spend: $0.0000" in reply
+
+
+@pytest.mark.asyncio
+async def test_status_includes_cumulative_spend(deps):
+    repo, _, _, db = deps
+    t1 = await repo.create(title="a", description="-", origin_chat_id=1)
+    t2 = await repo.create(title="b", description="-", origin_chat_id=1)
+    await repo.add_cost(t1.id, 0.75)
+    await repo.add_cost(t2.id, 0.50)
+
+    reply = await handle_status(db_path=db.path)
+    assert "Cumulative spend: $1.2500" in reply
 
 
 @pytest.mark.asyncio

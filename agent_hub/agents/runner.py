@@ -118,7 +118,14 @@ class AgentRunner:
             self._clients.clear()
 
     async def reset(self, agent_name: str, *, task_id: int | None = None) -> None:
-        """Drop an agent's session — next message starts a fresh context."""
+        """Drop an agent's session — next message starts a fresh context.
+
+        Disconnects the live SDK client AND forgets the persisted session
+        UUID, so the next reconnect generates a new conversation rather
+        than resuming the (presumably broken) one we just abandoned.
+        """
+        from agent_hub.agents.session_store import AgentSessionStore
+
         canonical = self.registry.resolve(agent_name)
         if canonical is None:
             raise KeyError(agent_name)
@@ -134,6 +141,9 @@ class AgentRunner:
                     task_id=task_id,
                     error=str(exc),
                 )
+        await AgentSessionStore(self.settings.database_path).forget(
+            agent_name=canonical, task_id=task_id,
+        )
 
     # ------------------------------------------------------------------
     # Sending
@@ -183,6 +193,7 @@ class AgentRunner:
         cwd: Path | None,
     ) -> Any:
         from agent_hub.agents.runner_options import build_sdk_options
+        from agent_hub.agents.session_store import AgentSessionStore
         from agent_hub.tasks.worktree_repo import WorktreeRepository
 
         role = self.registry.get(agent_name)
@@ -206,8 +217,20 @@ class AgentRunner:
             if effective_cwd is None:
                 effective_cwd = self._cwd
 
+            # Persistent (agent, task_id) → SDK session UUID. On the first
+            # creation this writes a new UUID; on subsequent creations
+            # (after a process restart) it returns the existing UUID so
+            # the CLI re-loads the prior conversation history.
+            session_store = AgentSessionStore(self.settings.database_path)
+            session_id = await session_store.get_or_create(
+                agent_name=role.name, task_id=task_id,
+            )
+
             options = build_sdk_options(
-                role, cwd=effective_cwd, db_path=self.settings.database_path,
+                role,
+                cwd=effective_cwd,
+                db_path=self.settings.database_path,
+                session_id=session_id,
             )
             client = _client_factory(options)
             await client.connect()

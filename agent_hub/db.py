@@ -41,6 +41,23 @@ CREATE TABLE IF NOT EXISTS approvals (
 """
 
 
+_SCHEMA_TASKS = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER REFERENCES tasks(id),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    status TEXT NOT NULL,
+    owner TEXT,
+    worktree_path TEXT,
+    branch_name TEXT,
+    origin_chat_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+
 class Database:
     """Thin async wrapper around an SQLite file."""
 
@@ -51,6 +68,7 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as conn:
             await conn.executescript(SCHEMA)
+            await conn.executescript(_SCHEMA_TASKS)
             await conn.commit()
         log.info("db.ready", path=str(self.path))
 

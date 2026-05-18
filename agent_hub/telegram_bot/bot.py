@@ -397,9 +397,18 @@ def build_application(
             await update.effective_chat.send_message("Task id must be an integer.")
             return
 
-        # Workspace info needed for the worktree creation + handoff.
-        repo_root = settings.default_workspace
-        worktrees_root = repo_root.parent / "worktrees" if repo_root else None
+        # Pull the LIVE workspace from the runner, not the static env value.
+        # User may have switched via /workspace <path>.
+        repo_root = orchestrator.runner.workspace
+
+        if repo_root is None:
+            await update.effective_chat.send_message(
+                "Cannot approve — no workspace is configured. "
+                "Set AGENT_WORKSPACES in .env or use /workspace <path> first."
+            )
+            return
+
+        worktrees_root = repo_root.parent / "worktrees"
 
         reply = await handle_approve(
             task_id=task_id,

@@ -56,3 +56,19 @@ def test_acquire_steals_when_garbage_contents(tmp_path: Path):
         assert lock_path.read_text().strip() == str(os.getpid())
     finally:
         lock.release()
+
+
+def test_context_manager_releases_on_exit(tmp_path: Path):
+    lock_path = tmp_path / ".orchestrator.lock"
+    with OrchestratorLock(lock_path):
+        assert lock_path.exists()
+    assert not lock_path.exists()
+
+
+def test_context_manager_releases_on_exception(tmp_path: Path):
+    lock_path = tmp_path / ".orchestrator.lock"
+    with pytest.raises(RuntimeError):
+        with OrchestratorLock(lock_path):
+            assert lock_path.exists()
+            raise RuntimeError("boom")
+    assert not lock_path.exists()

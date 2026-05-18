@@ -49,3 +49,10 @@ class OrchestratorLock:
             except FileNotFoundError:
                 pass
             self._owned = False
+
+    def __enter__(self) -> "OrchestratorLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.release()

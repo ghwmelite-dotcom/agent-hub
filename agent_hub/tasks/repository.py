@@ -146,3 +146,46 @@ class TaskRepository:
                 descendants.extend(new_children)
                 frontier = [c.id for c in new_children]
         return {"root": root, "descendants": descendants}
+
+    async def update(
+        self,
+        task_id: int,
+        *,
+        status: TaskStatus | None = None,
+        owner: str | None = None,
+        worktree_path: str | None = None,
+        branch_name: str | None = None,
+    ) -> Task | None:
+        from agent_hub.state_machine import validate_transition
+
+        current = await self.get(task_id)
+        if current is None:
+            return None
+        if status is not None and status != current.status:
+            validate_transition(current.status, status)
+
+        sets: list[str] = ["updated_at = ?"]
+        params: list = [_utcnow_iso()]
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status.value)
+        if owner is not None:
+            sets.append("owner = ?")
+            params.append(owner)
+        if worktree_path is not None:
+            sets.append("worktree_path = ?")
+            params.append(worktree_path)
+        if branch_name is not None:
+            sets.append("branch_name = ?")
+            params.append(branch_name)
+        params.append(task_id)
+
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            await conn.execute(
+                f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?",
+                tuple(params),
+            )
+            await conn.commit()
+        return await self.get(task_id)

@@ -107,3 +107,42 @@ async def test_tree_with_cycle_terminates(repo, temp_db_path):
     # No node appears twice.
     descendant_id_list = [t.id for t in tree["descendants"]]
     assert len(descendant_id_list) == len(set(descendant_id_list))
+
+
+from agent_hub.state_machine import InvalidTransition
+
+
+@pytest.mark.asyncio
+async def test_update_status_valid_transition(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    updated = await repo.update(t.id, status=TaskStatus.PLANNING)
+    assert updated.status == TaskStatus.PLANNING
+
+
+@pytest.mark.asyncio
+async def test_update_status_invalid_transition_raises(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    with pytest.raises(InvalidTransition):
+        await repo.update(t.id, status=TaskStatus.DONE)
+
+
+@pytest.mark.asyncio
+async def test_update_owner(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    updated = await repo.update(t.id, owner="pm")
+    assert updated.owner == "pm"
+
+
+@pytest.mark.asyncio
+async def test_update_unknown_task_returns_none(repo):
+    assert await repo.update(99999, owner="x") is None
+
+
+@pytest.mark.asyncio
+async def test_update_refreshes_updated_at(repo):
+    t = await repo.create(title="x", description="-", origin_chat_id=1)
+    original = t.updated_at
+    import asyncio
+    await asyncio.sleep(0.01)
+    updated = await repo.update(t.id, owner="pm")
+    assert updated.updated_at > original

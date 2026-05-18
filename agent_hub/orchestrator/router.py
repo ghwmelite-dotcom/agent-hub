@@ -14,6 +14,7 @@ import asyncio
 import re
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 
 import structlog
 
@@ -21,6 +22,7 @@ from agent_hub.agents import AgentRegistry, AgentRunner
 from agent_hub.agents.runner import AgentEvent
 from agent_hub.db import Database
 from agent_hub.orchestrator.surface import MessageSurface
+from agent_hub.state_machine import TaskStatus
 
 log = structlog.get_logger(__name__)
 
@@ -79,12 +81,14 @@ class Orchestrator:
         runner: AgentRunner,
         db: Database,
         surface: MessageSurface | None = None,
+        repo_root: Path | None = None,
         default_agent: str = "pm",
     ):
         self.registry = registry
         self.runner = runner
         self.db = db
         self.surface = surface
+        self.repo_root = repo_root
         self.default_agent = default_agent
         # Per-chat sticky agent — last agent the user was talking to.
         self._sticky: dict[int, str] = {}
@@ -205,6 +209,46 @@ class Orchestrator:
             body = "".join(accumulated).strip()
             if body:
                 await self.surface.dm(chat_id, f"@{row.to_agent}: {body}")
+
+        # Post-turn: did the task land in done?
+        post_turn_task = await repo.get(row.task_id)
+        if post_turn_task is not None and post_turn_task.status == TaskStatus.DONE:
+            await self._on_task_done(post_turn_task)
+
+    async def _on_task_done(self, task) -> None:
+        """Called when an agent's turn left a task in done status.
+
+        Pushes the branch, runs epic auto-completion, and DMs the user.
+        """
+        from agent_hub.orchestrator.epic import maybe_complete_epic
+        from agent_hub.orchestrator.push import push_task_branch
+
+        if self.repo_root is None:
+            return  # not configured — silently skip push
+
+        result = await push_task_branch(
+            task_id=task.id,
+            repo_root=self.repo_root,
+            db_path=self.db.path,
+        )
+        if self.surface is not None:
+            if result["pushed"]:
+                await self.surface.dm(
+                    task.origin_chat_id,
+                    f"✅ Task #{task.id} done. Pushed branch `{result['branch']}` to origin.",
+                )
+            else:
+                await self.surface.dm(
+                    task.origin_chat_id,
+                    f"⚠️ Task #{task.id} done but push failed: {result.get('error', 'unknown')}",
+                )
+
+        epic_id = await maybe_complete_epic(task_id=task.id, db_path=self.db.path)
+        if epic_id is not None and self.surface is not None:
+            await self.surface.dm(
+                task.origin_chat_id,
+                f"🎉 Epic #{epic_id} complete (all leaves done).",
+            )
 
     async def _tick_gates(self) -> None:
         """Detect pending design gates and DM the user. Idempotent —

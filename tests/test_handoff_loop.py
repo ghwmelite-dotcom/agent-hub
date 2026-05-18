@@ -79,3 +79,46 @@ async def test_loop_processes_enqueued_handoffs(deps):
         assert runner.calls == [("architect", _expected_routed_message(task.id, "pm", "m"), task.id)]
     finally:
         await orch.stop()
+
+
+@pytest.mark.asyncio
+async def test_tick_streams_text_to_origin_chat(deps):
+    orch, runner, surface, repo, queue = deps
+    task = await repo.create(title="x", description="-", origin_chat_id=99)
+    runner.script("architect", task_id=task.id, events=[
+        TextChunk(text="design is ready"),
+        TurnDone(cost_usd=0.01, duration_ms=10),
+    ])
+    await queue.enqueue(task_id=task.id, from_agent="pm", to_agent="architect", message="m")
+
+    await orch._tick_handoff()
+
+    msgs = surface.dms_to(99)
+    # The orchestrator prefixes streamed text with the speaking agent.
+    assert any("design is ready" in m for m in msgs)
+    assert any("architect" in m.lower() for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_tick_does_not_stream_when_no_surface(temp_db_path):
+    """If orchestrator has surface=None, dispatch still works (silent)."""
+    db = Database(temp_db_path)
+    await db.init()
+    runner = FakeAgentRunner()
+    orch = Orchestrator(
+        registry=AgentRegistry.load(),
+        runner=runner,
+        db=db,
+        surface=None,
+    )
+    repo = TaskRepository(temp_db_path)
+    queue = HandoffQueue(temp_db_path)
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    runner.script("architect", task_id=task.id, events=[
+        TextChunk(text="ok"),
+        TurnDone(cost_usd=0.01, duration_ms=10),
+    ])
+    await queue.enqueue(task_id=task.id, from_agent="pm", to_agent="architect", message="m")
+    await orch._tick_handoff()
+    # No surface → no crash, just no streaming.
+    assert runner.calls

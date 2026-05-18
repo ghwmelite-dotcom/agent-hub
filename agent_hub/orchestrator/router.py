@@ -178,23 +178,31 @@ class Orchestrator:
         self._started = False
 
     async def _tick_handoff(self) -> None:
-        """Claim at most one handoff queue row and dispatch it.
-
-        Called repeatedly by the handoff loop (Task 5). Splitting the
-        tick from the loop makes the dispatch logic unit-testable.
-        """
+        """Claim at most one handoff queue row and dispatch it."""
+        from agent_hub.agents.runner import TextChunk
         from agent_hub.tasks.handoff_queue import HandoffQueue
+        from agent_hub.tasks.repository import TaskRepository
 
         queue = HandoffQueue(self.db.path)
         row = await queue.claim()
         if row is None:
             return
 
+        # Look up origin_chat_id so we know where to stream the response.
+        repo = TaskRepository(self.db.path)
+        task = await repo.get(row.task_id)
+        chat_id = task.origin_chat_id if task else None
+
         routed_text = f"[task #{row.task_id}, from @{row.from_agent}] {row.message}"
-        async for _event in self.runner.send(row.to_agent, routed_text, task_id=row.task_id):
-            # Streaming the agent's events to Telegram lands in Task 6.
-            # For now we just drain the iterator.
-            pass
+        accumulated: list[str] = []
+        async for event in self.runner.send(row.to_agent, routed_text, task_id=row.task_id):
+            if isinstance(event, TextChunk):
+                accumulated.append(event.text)
+
+        if self.surface is not None and chat_id is not None and accumulated:
+            body = "".join(accumulated).strip()
+            if body:
+                await self.surface.dm(chat_id, f"@{row.to_agent}: {body}")
 
     async def _run_handoff_loop(self) -> None:
         loop_log = structlog.get_logger("agent_hub.handoff_loop")

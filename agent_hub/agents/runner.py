@@ -99,6 +99,11 @@ class AgentRunner:
     def workspace(self) -> Path | None:
         return self._cwd
 
+    @property
+    def active_session_count(self) -> int:
+        """Number of live (agent, task_id) SDK sessions — for /status."""
+        return len(self._clients)
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------

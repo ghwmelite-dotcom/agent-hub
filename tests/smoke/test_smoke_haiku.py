@@ -50,13 +50,21 @@ def _haiku_pinned_registry(original: AgentRegistry) -> AgentRegistry:
     return AgentRegistry(pinned)
 
 
-def _seed_git_repo(repo_root: Path) -> None:
+def _seed_git_repo(repo_root: Path, remote_path: Path) -> None:
+    """Init repo_root with `origin` pointing at a local bare remote.
+
+    `/approve` preflights `git remote get-url origin`; without a remote
+    the task would be refused before the agents run.
+    """
+    subprocess.check_call(["git", "init", "--bare", "-b", "main", str(remote_path)])
     subprocess.check_call(["git", "init", "-b", "main"], cwd=repo_root)
     subprocess.check_call(["git", "config", "user.name", "Smoke"], cwd=repo_root)
     subprocess.check_call(["git", "config", "user.email", "smoke@example.com"], cwd=repo_root)
+    subprocess.check_call(["git", "remote", "add", "origin", str(remote_path)], cwd=repo_root)
     (repo_root / "README.md").write_text("# Smoke project\n\nA tiny test target.\n")
     subprocess.check_call(["git", "add", "README.md"], cwd=repo_root)
     subprocess.check_call(["git", "commit", "-m", "initial"], cwd=repo_root)
+    subprocess.check_call(["git", "push", "origin", "main"], cwd=repo_root)
 
 
 @pytest.mark.asyncio
@@ -71,7 +79,8 @@ async def test_haiku_end_to_end_simple_task(tmp_path: Path):
 
     repo_root = tmp_path / "smoke-project"
     repo_root.mkdir()
-    _seed_git_repo(repo_root)
+    remote_path = tmp_path / "smoke-remote.git"
+    _seed_git_repo(repo_root, remote_path)
     worktrees_root = tmp_path / "worktrees"
 
     db_path = tmp_path / "agent_hub.db"
@@ -161,6 +170,18 @@ async def test_haiku_end_to_end_simple_task(tmp_path: Path):
         assert proc.returncode == 0
         assert f"task/{task.id}" in proc.stdout, (
             f"No task branch found in git output: {proc.stdout}"
+        )
+
+        # The branch should also exist on the bare remote — push has
+        # been a silent failure mode in past runs, so assert it explicitly.
+        remote_proc = subprocess.run(
+            ["git", "--git-dir", str(remote_path), "branch", "--list"],
+            capture_output=True, text=True,
+        )
+        assert remote_proc.returncode == 0
+        assert f"task/{task.id}" in remote_proc.stdout, (
+            f"Branch was not pushed to origin. Remote branches: {remote_proc.stdout}. "
+            f"DMs: {[m for _, m in surface.sent]}"
         )
 
     finally:

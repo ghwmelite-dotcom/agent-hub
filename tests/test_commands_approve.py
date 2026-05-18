@@ -108,6 +108,39 @@ async def test_approve_with_repo_root_creates_worktree_and_handoff(deps, git_rep
 
 
 @pytest.mark.asyncio
+async def test_approve_refuses_when_no_origin_configured(deps, tmp_path):
+    """If repo_root has no `origin` remote, /approve must refuse BEFORE
+    mutating gate state — otherwise the agent loop runs only to die on push."""
+    repo, gates, db = deps
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    await repo.update(task.id, status=TaskStatus.PLANNING)
+    await repo.update(task.id, status=TaskStatus.DESIGN_REVIEW)
+    await gates.request(task_id=task.id, kind="design")
+
+    # Bare repo with no origin
+    no_origin = tmp_path / "no-origin"
+    no_origin.mkdir()
+    subprocess.check_call(["git", "init", "-b", "main", str(no_origin)])
+
+    reply = await handle_approve(
+        task_id=task.id,
+        db_path=db.path,
+        repo_root=no_origin,
+        worktrees_root=tmp_path / "worktrees",
+    )
+
+    # The friendly error mentions origin
+    assert "origin" in reply.lower()
+    # Gate is NOT resolved — user can re-/approve after fixing remote
+    assert await gates.status(task_id=task.id, kind="design") == "pending"
+    # Status is unchanged (still design_review)
+    assert (await repo.get(task.id)).status == TaskStatus.DESIGN_REVIEW
+    # No worktree created
+    wt_repo = WorktreeRepository(db.path)
+    assert (await wt_repo.get_by_task(task.id)) is None
+
+
+@pytest.mark.asyncio
 async def test_approve_without_repo_root_is_gate_only(deps):
     """Backward-compat path: no repo_root means just resolve gate + flip status."""
     repo, gates, db = deps

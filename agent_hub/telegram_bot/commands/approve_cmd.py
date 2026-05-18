@@ -53,6 +53,20 @@ async def handle_approve(
     if status != "pending":
         return f"Task #{task_id} gate is already {status}."
 
+    # Preflight: if we're on the production path, confirm `origin` is
+    # configured BEFORE we mutate any state. Otherwise the task pipeline
+    # ends with a push failure after agents have already burned tokens.
+    if repo_root is not None:
+        from agent_hub.orchestrator.push import verify_remote_configured
+        check = await verify_remote_configured(repo_root)
+        if not check.ok:
+            return (
+                f"❌ Task #{task_id} can't ship — `origin` is not configured "
+                f"on {repo_root}. Run `git remote add origin <url>` there, "
+                f"then `/approve {task_id}` again.\n"
+                f"({check.error})"
+            )
+
     await gates.resolve(task_id=task_id, kind="design", resolution="approved")
     try:
         await repo.update(task_id, status=TaskStatus.READY)

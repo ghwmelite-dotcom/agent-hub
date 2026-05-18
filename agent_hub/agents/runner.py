@@ -178,14 +178,32 @@ class AgentRunner:
         cwd: Path | None,
     ) -> Any:
         from agent_hub.agents.runner_options import build_sdk_options
+        from agent_hub.tasks.worktree_repo import WorktreeRepository
 
         role = self.registry.get(agent_name)
         key = (role.name, task_id)
         async with self._lock:
             if key in self._clients:
                 return self._clients[key]
+
+            # Resolve effective cwd: prefer recorded worktree for task_id,
+            # fall back to caller-supplied cwd, then to global workspace.
+            effective_cwd: Path | None = cwd
+            if task_id is not None and effective_cwd is None:
+                try:
+                    wt_repo = WorktreeRepository(self.settings.database_path)
+                    row = await wt_repo.get_by_task(task_id)
+                    if row is not None and row.cleaned_at is None:
+                        effective_cwd = Path(row.path)
+                except Exception:  # noqa: BLE001
+                    # DB not yet initialised or worktrees table missing —
+                    # fall through to the global workspace default.
+                    pass
+            if effective_cwd is None:
+                effective_cwd = self._cwd
+
             options = build_sdk_options(
-                role, cwd=cwd, db_path=self.settings.database_path
+                role, cwd=effective_cwd, db_path=self.settings.database_path,
             )
             client = _client_factory(options)
             await client.connect()
@@ -196,7 +214,7 @@ class AgentRunner:
                 task_id=task_id,
                 model=role.model,
                 tools=role.allowed_tools,
-                cwd=str(cwd) if cwd else None,
+                cwd=str(effective_cwd) if effective_cwd else None,
             )
             return client
 

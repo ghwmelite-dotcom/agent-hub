@@ -103,3 +103,34 @@ async def test_shutdown_disconnects_all_pool_entries(patched_runner):
     await runner._get_or_create_client("architect", task_id=1, cwd=None)
     await runner.shutdown()
     assert all(c.disconnected for c in created)
+
+
+@pytest.mark.asyncio
+async def test_send_uses_worktree_path_for_task(patched_runner, tmp_path):
+    """When task_id is given AND a worktree is recorded for it, the runner
+    should construct the client with cwd=that worktree path (not the
+    global workspace)."""
+    runner, created = patched_runner
+
+    # Seed: init the DB and record a worktree for task_id=42.
+    from agent_hub.db import Database
+    from agent_hub.tasks.repository import TaskRepository
+    from agent_hub.tasks.worktree_repo import WorktreeRepository
+
+    db_path = runner.settings.database_path
+    db = Database(db_path)
+    await db.init()
+    repo = TaskRepository(db_path)
+    wt_repo = WorktreeRepository(db_path)
+    task = await repo.create(title="x", description="-", origin_chat_id=1)
+    fake_wt_path = tmp_path / "worktrees" / str(task.id)
+    fake_wt_path.mkdir(parents=True)
+    await wt_repo.record(
+        task_id=task.id, path=str(fake_wt_path),
+        branch="task/x", base_branch="main",
+    )
+
+    client = await runner._get_or_create_client("pm", task_id=task.id, cwd=None)
+    # Even though cwd=None was passed, the runner should have resolved
+    # cwd via the worktree path for this task_id.
+    assert client.options.cwd == str(fake_wt_path)

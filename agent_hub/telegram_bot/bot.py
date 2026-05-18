@@ -359,6 +359,78 @@ def build_application(
     app.add_handler(CommandHandler("workspace", cmd_workspace))
     app.add_handler(CommandHandler("projects", cmd_projects))
     app.add_handler(CommandHandler("whoami", cmd_whoami))
+
+    # ------------------------------------------------------------------
+    # Task-management commands (Tasks 9-13)
+    # ------------------------------------------------------------------
+    from agent_hub.telegram_bot.commands.approve_cmd import handle_approve
+    from agent_hub.telegram_bot.commands.reject_cmd import handle_reject
+    from agent_hub.telegram_bot.commands.tasks_cmd import handle_tasks
+    from agent_hub.telegram_bot.commands.task_cmd import handle_task
+    from agent_hub.telegram_bot.commands.resume_cmd import handle_resume
+
+    db_path = settings.database_path
+
+    async def _on_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        reply = await handle_tasks(db_path=db_path)
+        await update.effective_chat.send_message(reply)
+
+    async def _on_task(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await update.effective_chat.send_message("Usage: /task <id>")
+            return
+        try:
+            task_id = int(context.args[0])
+        except ValueError:
+            await update.effective_chat.send_message("Task id must be an integer.")
+            return
+        reply = await handle_task(task_id=task_id, db_path=db_path)
+        await update.effective_chat.send_message(reply)
+
+    async def _on_approve(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await update.effective_chat.send_message("Usage: /approve <id>")
+            return
+        try:
+            task_id = int(context.args[0])
+        except ValueError:
+            await update.effective_chat.send_message("Task id must be an integer.")
+            return
+        reply = await handle_approve(task_id=task_id, db_path=db_path)
+        await update.effective_chat.send_message(reply)
+
+    async def _on_reject(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if len(context.args) < 2:
+            await update.effective_chat.send_message("Usage: /reject <id> <reason>")
+            return
+        try:
+            task_id = int(context.args[0])
+        except ValueError:
+            await update.effective_chat.send_message("Task id must be an integer.")
+            return
+        reason = " ".join(context.args[1:])
+        reply = await handle_reject(task_id=task_id, reason=reason, db_path=db_path)
+        await update.effective_chat.send_message(reply)
+
+    async def _on_resume(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await update.effective_chat.send_message("Usage: /resume <id>")
+            return
+        try:
+            task_id = int(context.args[0])
+        except ValueError:
+            await update.effective_chat.send_message("Task id must be an integer.")
+            return
+        reply = await handle_resume(task_id=task_id, db_path=db_path)
+        await update.effective_chat.send_message(reply)
+
+    app.add_handler(CommandHandler("tasks", _on_tasks))
+    app.add_handler(CommandHandler("task", _on_task))
+    app.add_handler(CommandHandler("approve", _on_approve))
+    app.add_handler(CommandHandler("reject", _on_reject))
+    app.add_handler(CommandHandler("resume", _on_resume))
+
+    # Catch-all — must come AFTER all CommandHandlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))
 
     return app

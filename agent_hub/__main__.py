@@ -40,6 +40,24 @@ def _export_db_path_to_env(db_path: Path) -> None:
     os.environ["AGENT_HUB_DB"] = str(db_path)
 
 
+def _build_orchestrator(
+    *,
+    settings: Settings,
+    registry,
+    runner,
+    db: Database,
+    surface,  # MessageSurface | None
+):
+    """Construct an Orchestrator wired to the correct repo_root."""
+    return Orchestrator(
+        registry=registry,
+        runner=runner,
+        db=db,
+        surface=surface,
+        repo_root=settings.default_workspace,
+    )
+
+
 def _configure_logging(level: str) -> None:
     logging.basicConfig(
         format="%(message)s",
@@ -64,7 +82,7 @@ def _configure_logging(level: str) -> None:
     )
 
 
-async def _post_init(app, settings: Settings, runner: AgentRunner, db: Database) -> None:
+async def _post_init(app, settings: Settings, runner: AgentRunner, db: Database, orchestrator) -> None:
     """Telegram PTB post-init hook. Initialize anything that needs an event loop."""
     log = structlog.get_logger("agent_hub")
     await db.init()
@@ -83,9 +101,20 @@ async def _post_init(app, settings: Settings, runner: AgentRunner, db: Database)
         # First boot — seed recent list with the default workspace.
         await db.set_active_workspace(str(runner.workspace))
 
+    # Install the real Telegram surface now that the app is available.
+    from agent_hub.telegram_bot.surface_telegram import TelegramSurface
+    orchestrator.surface = TelegramSurface(app)
 
-async def _post_shutdown(app, runner: AgentRunner) -> None:
-    """Drain agent sessions cleanly on shutdown."""
+    await orchestrator.start()
+
+    # Restart-resume scan once at boot, after start so the loops are running.
+    from agent_hub.orchestrator.resume import scan_stale_tasks
+    await scan_stale_tasks(db_path=settings.database_path, surface=orchestrator.surface)
+
+
+async def _post_shutdown(app, runner: AgentRunner, orchestrator) -> None:
+    """Stop orchestrator and drain agent sessions cleanly on shutdown."""
+    await orchestrator.stop()
     await runner.shutdown()
 
 
@@ -109,17 +138,19 @@ def main() -> None:
     runner = AgentRunner(settings=settings, registry=registry)
     db = Database(settings.database_path)
 
-    orchestrator = Orchestrator(
+    orchestrator = _build_orchestrator(
+        settings=settings,
         registry=registry,
         runner=runner,
         db=db,
+        surface=None,
     )
 
     app = build_application(settings=settings, orchestrator=orchestrator)
 
     # PTB lets us hook into its init/shutdown lifecycle so we share its loop.
-    app.post_init = lambda a: _post_init(a, settings, runner, db)
-    app.post_shutdown = lambda a: _post_shutdown(a, runner)
+    app.post_init = lambda a: _post_init(a, settings, runner, db, orchestrator)
+    app.post_shutdown = lambda a: _post_shutdown(a, runner, orchestrator)
 
     try:
         log.info("agent_hub.polling")

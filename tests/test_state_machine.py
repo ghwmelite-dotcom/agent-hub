@@ -1,3 +1,5 @@
+import itertools
+
 import pytest
 from agent_hub.state_machine import (
     ALLOWED_TRANSITIONS,
@@ -69,3 +71,19 @@ def test_done_is_terminal():
 def test_pending_can_be_blocked():
     """Regression: PENDING -> BLOCKED was missing from the original transition set."""
     assert is_allowed(TaskStatus.PENDING, TaskStatus.BLOCKED)
+
+
+def test_every_pair_in_map_passes_validation():
+    """Every (from, to) explicitly in ALLOWED_TRANSITIONS must pass validation."""
+    for from_s, to_s in ALLOWED_TRANSITIONS:
+        validate_transition(from_s, to_s)  # must not raise
+
+
+def test_every_pair_not_in_map_fails_validation():
+    """Cross-product minus allowed set must all raise InvalidTransition."""
+    all_statuses = list(TaskStatus) + [None]
+    for from_s, to_s in itertools.product(all_statuses, TaskStatus):
+        if (from_s, to_s) in ALLOWED_TRANSITIONS:
+            continue
+        with pytest.raises(InvalidTransition):
+            validate_transition(from_s, to_s)

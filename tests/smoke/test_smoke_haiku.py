@@ -174,13 +174,23 @@ async def test_haiku_end_to_end_simple_task(tmp_path: Path):
 
         # The branch should also exist on the bare remote — push has
         # been a silent failure mode in past runs, so assert it explicitly.
-        remote_proc = subprocess.run(
-            ["git", "--git-dir", str(remote_path), "branch", "--list"],
-            capture_output=True, text=True,
-        )
-        assert remote_proc.returncode == 0
-        assert f"task/{task.id}" in remote_proc.stdout, (
-            f"Branch was not pushed to origin. Remote branches: {remote_proc.stdout}. "
+        # `_on_task_done` runs the push asynchronously after QA marks the
+        # task DONE; poll the remote (up to 30s) for the branch to appear.
+        remote_deadline = asyncio.get_event_loop().time() + 30
+        remote_stdout = ""
+        while asyncio.get_event_loop().time() < remote_deadline:
+            remote_proc = subprocess.run(
+                ["git", "--git-dir", str(remote_path), "branch", "--list"],
+                capture_output=True, text=True,
+            )
+            assert remote_proc.returncode == 0
+            remote_stdout = remote_proc.stdout
+            if f"task/{task.id}" in remote_stdout:
+                break
+            await asyncio.sleep(1.0)
+
+        assert f"task/{task.id}" in remote_stdout, (
+            f"Branch was not pushed to origin. Remote branches: {remote_stdout}. "
             f"DMs: {[m for _, m in surface.sent]}"
         )
 

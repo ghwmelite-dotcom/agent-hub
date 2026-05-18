@@ -71,3 +71,40 @@ class HandoffQueue:
             )
             rows = await cur.fetchall()
         return [_row_to_model(r) for r in rows]
+
+    async def claim(self) -> HandoffRow | None:
+        """Atomically claim the oldest unclaimed row, or None if queue empty.
+
+        Wrapped in BEGIN IMMEDIATE so two callers race on a write lock
+        rather than both reading the same row.
+        """
+        now = _utcnow_iso()
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            await conn.execute("BEGIN IMMEDIATE")
+            try:
+                cur = await conn.execute(
+                    "SELECT id FROM handoff_queue "
+                    "WHERE claimed_at IS NULL "
+                    "ORDER BY enqueued_at ASC LIMIT 1"
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    await conn.execute("ROLLBACK")
+                    return None
+                row_id = row["id"]
+                await conn.execute(
+                    "UPDATE handoff_queue SET claimed_at = ? "
+                    "WHERE id = ? AND claimed_at IS NULL",
+                    (now, row_id),
+                )
+                cur = await conn.execute(
+                    f"SELECT {_COLS} FROM handoff_queue WHERE id = ?", (row_id,),
+                )
+                fetched = await cur.fetchone()
+                await conn.commit()
+            except Exception:
+                await conn.execute("ROLLBACK")
+                raise
+        return _row_to_model(fetched) if fetched else None

@@ -158,8 +158,7 @@ class Orchestrator:
             raise RuntimeError("Orchestrator.start() called twice")
         self._started = True
         self._stop_event.clear()
-        # Background loops land in later tasks (5, 8). For now this is a
-        # stub that creates no tasks but flips the flag so stop() works.
+        self._tasks.append(asyncio.create_task(self._run_handoff_loop()))
 
     async def stop(self) -> None:
         """Signal all background loops to exit and wait for them."""
@@ -196,3 +195,15 @@ class Orchestrator:
             # Streaming the agent's events to Telegram lands in Task 6.
             # For now we just drain the iterator.
             pass
+
+    async def _run_handoff_loop(self) -> None:
+        loop_log = structlog.get_logger("agent_hub.handoff_loop")
+        while not self._stop_event.is_set():
+            try:
+                await self._tick_handoff()
+            except Exception as exc:
+                loop_log.exception("handoff_loop.tick_failed", error=str(exc))
+            try:
+                await asyncio.wait_for(self._stop_event.wait(), timeout=0.25)
+            except asyncio.TimeoutError:
+                pass

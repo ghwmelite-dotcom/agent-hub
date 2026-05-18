@@ -57,3 +57,25 @@ def _expected_routed_message(task_id: int, from_agent: str, body: str) -> str:
     """The orchestrator prepends task context. Match the exact format the
     impl produces — adjust this helper if the format changes."""
     return f"[task #{task_id}, from @{from_agent}] {body}"
+
+
+@pytest.mark.asyncio
+async def test_loop_processes_enqueued_handoffs(deps):
+    orch, runner, _, repo, queue = deps
+    task = await repo.create(title="x", description="-", origin_chat_id=42)
+    runner.script("architect", task_id=task.id, events=[
+        TextChunk(text="ok"),
+        TurnDone(cost_usd=0.01, duration_ms=10),
+    ])
+
+    await orch.start()
+    try:
+        await queue.enqueue(task_id=task.id, from_agent="pm", to_agent="architect", message="m")
+        # The loop ticks every 250ms; wait up to 2s for the dispatch.
+        for _ in range(20):
+            await asyncio.sleep(0.1)
+            if runner.calls:
+                break
+        assert runner.calls == [("architect", _expected_routed_message(task.id, "pm", "m"), task.id)]
+    finally:
+        await orch.stop()

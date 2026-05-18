@@ -91,3 +91,10 @@ class WorktreeRepository:
             )
             rows = await cur.fetchall()
         return [_row_to_worktree(r) for r in rows]
+
+    async def list_orphans(self) -> list[Worktree]:
+        """Rows where cleaned_at IS NULL but the worktree path no longer
+        exists on disk. The orchestrator (Plan 3) surfaces these to the
+        user on boot — we never auto-delete."""
+        active = await self.list_active()
+        return [w for w in active if not Path(w.path).exists()]

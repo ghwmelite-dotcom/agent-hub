@@ -63,8 +63,11 @@ def _seed_git_repo(repo_root: Path) -> None:
 async def test_haiku_end_to_end_simple_task(tmp_path: Path):
     """File a trivial task, watch PM -> architect -> /approve -> fullstack
     -> reviewer -> QA -> done. Uses FakeMessageSurface to capture DMs."""
-    if not os.environ.get("ANTHROPIC_API_KEY"):
-        pytest.skip("ANTHROPIC_API_KEY not set")
+    import shutil
+    api_key_set = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    claude_cli_available = shutil.which("claude") is not None
+    if not api_key_set and not claude_cli_available:
+        pytest.skip("Neither ANTHROPIC_API_KEY nor `claude` CLI is available")
 
     repo_root = tmp_path / "smoke-project"
     repo_root.mkdir()
@@ -86,7 +89,11 @@ async def test_haiku_end_to_end_simple_task(tmp_path: Path):
         agent_workspaces=[repo_root],
     )
 
-    registry = _haiku_pinned_registry(AgentRegistry.load())
+    # Bypassing Haiku pin for this run — use each role's default model
+    # (Sonnet/Opus per the role YAML) to localize whether Haiku tool-following
+    # was the bug. Revert this line to `_haiku_pinned_registry(...)` for
+    # cheap CI runs once we've confirmed the prompts work on stronger models.
+    registry = AgentRegistry.load()
     runner = AgentRunner(settings=settings, registry=registry)
     surface = FakeMessageSurface()
 

@@ -98,11 +98,11 @@ async def test_haiku_end_to_end_simple_task(tmp_path: Path):
         agent_workspaces=[repo_root],
     )
 
-    # Bypassing Haiku pin for this run — use each role's default model
-    # (Sonnet/Opus per the role YAML) to localize whether Haiku tool-following
-    # was the bug. Revert this line to `_haiku_pinned_registry(...)` for
-    # cheap CI runs once we've confirmed the prompts work on stronger models.
-    registry = AgentRegistry.load()
+    # Haiku-pinned registry — cheap baseline. Defaults (Sonnet/Opus per
+    # role YAML) have been verified to work end-to-end; Haiku is the goal
+    # for routine CI. Drop the `_haiku_pinned_registry(...)` wrapper if a
+    # prompts/tool-following regression on Haiku needs to be isolated.
+    registry = _haiku_pinned_registry(AgentRegistry.load())
     runner = AgentRunner(settings=settings, registry=registry)
     surface = FakeMessageSurface()
 

@@ -41,6 +41,73 @@ CREATE TABLE IF NOT EXISTS approvals (
 """
 
 
+_SCHEMA_TASKS = """
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    parent_id INTEGER REFERENCES tasks(id),
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    status TEXT NOT NULL,
+    owner TEXT,
+    worktree_path TEXT,
+    branch_name TEXT,
+    origin_chat_id INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+"""
+
+_SCHEMA_TASK_EVENTS = """
+CREATE TABLE IF NOT EXISTS task_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    ts TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_task_events_task_id_ts ON task_events(task_id, ts);
+"""
+
+_SCHEMA_HANDOFF_QUEUE = """
+CREATE TABLE IF NOT EXISTS handoff_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    from_agent TEXT NOT NULL,
+    to_agent TEXT NOT NULL,
+    message TEXT NOT NULL,
+    enqueued_at TEXT NOT NULL,
+    claimed_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_handoff_queue_unclaimed ON handoff_queue(claimed_at) WHERE claimed_at IS NULL;
+"""
+
+_SCHEMA_GATES = """
+CREATE TABLE IF NOT EXISTS gates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL REFERENCES tasks(id),
+    kind TEXT NOT NULL,
+    artifact_path TEXT,
+    summary TEXT,
+    requested_at TEXT NOT NULL,
+    resolved_at TEXT,
+    resolution TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_gates_pending ON gates(task_id, kind) WHERE resolved_at IS NULL;
+"""
+
+_SCHEMA_WORKTREES = """
+CREATE TABLE IF NOT EXISTS worktrees (
+    task_id INTEGER PRIMARY KEY REFERENCES tasks(id),
+    path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    base_branch TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    cleaned_at TEXT
+);
+"""
+
+
 class Database:
     """Thin async wrapper around an SQLite file."""
 
@@ -50,7 +117,14 @@ class Database:
     async def init(self) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with aiosqlite.connect(self.path) as conn:
+            await conn.execute("PRAGMA journal_mode = WAL")
+            await conn.execute("PRAGMA foreign_keys = ON")
             await conn.executescript(SCHEMA)
+            await conn.executescript(_SCHEMA_TASKS)
+            await conn.executescript(_SCHEMA_TASK_EVENTS)
+            await conn.executescript(_SCHEMA_HANDOFF_QUEUE)
+            await conn.executescript(_SCHEMA_GATES)
+            await conn.executescript(_SCHEMA_WORKTREES)
             await conn.commit()
         log.info("db.ready", path=str(self.path))
 

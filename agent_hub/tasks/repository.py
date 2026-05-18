@@ -129,6 +129,7 @@ class TaskRepository:
             return None
         descendants: list[Task] = []
         frontier = [root.id]
+        visited: set[int] = {root.id}
         async with self._connect() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
             conn.row_factory = aiosqlite.Row
@@ -140,6 +141,8 @@ class TaskRepository:
                 )
                 rows = await cur.fetchall()
                 children = [_row_to_task(r) for r in rows]
-                descendants.extend(children)
-                frontier = [c.id for c in children]
+                new_children = [c for c in children if c.id not in visited]
+                visited.update(c.id for c in new_children)
+                descendants.extend(new_children)
+                frontier = [c.id for c in new_children]
         return {"root": root, "descendants": descendants}

@@ -83,3 +83,27 @@ async def test_tree_returns_root_with_descendants(repo):
 @pytest.mark.asyncio
 async def test_tree_unknown_returns_none(repo):
     assert await repo.tree(99999) is None
+
+
+@pytest.mark.asyncio
+async def test_tree_with_cycle_terminates(repo, temp_db_path):
+    """tree() must not infinite-loop if parent_id cycles exist."""
+    import aiosqlite
+    a = await repo.create(title="a", description="-", origin_chat_id=1)
+    b = await repo.create(title="b", description="-", origin_chat_id=1, parent_id=a.id)
+    # Force a cycle: make a's parent be b. (Not reachable via create's API,
+    # but a future update method could land us here.)
+    async with aiosqlite.connect(temp_db_path) as conn:
+        await conn.execute("UPDATE tasks SET parent_id = ? WHERE id = ?", (b.id, a.id))
+        await conn.commit()
+    tree = await repo.tree(a.id)
+    # Just must terminate. Exact descendant content depends on traversal —
+    # the important assertion is that we got *something* back and no hang.
+    assert tree is not None
+    assert tree["root"].id == a.id
+    # b is a's child via the original link, so it appears.
+    descendant_ids = {t.id for t in tree["descendants"]}
+    assert b.id in descendant_ids
+    # No node appears twice.
+    descendant_id_list = [t.id for t in tree["descendants"]]
+    assert len(descendant_id_list) == len(set(descendant_id_list))

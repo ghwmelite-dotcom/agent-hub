@@ -35,3 +35,14 @@ def test_acquire_lock_raises_when_already_held(tmp_path: Path):
             _acquire_orchestrator_lock_or_exit(db_path)
     finally:
         first.release()
+
+
+def test_export_db_path_sets_env(tmp_path: Path, monkeypatch):
+    """The runner's child MCP processes need AGENT_HUB_DB to find the
+    database. The entrypoint exports it before launching anything."""
+    from agent_hub.__main__ import _export_db_path_to_env
+
+    db_path = tmp_path / "data" / "agent_hub.db"
+    monkeypatch.delenv("AGENT_HUB_DB", raising=False)
+    _export_db_path_to_env(db_path)
+    assert os.environ["AGENT_HUB_DB"] == str(db_path)

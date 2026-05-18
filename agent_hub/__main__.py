@@ -7,6 +7,7 @@ Telegram application, and runs the bot until Ctrl-C.
 from __future__ import annotations
 
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -31,6 +32,12 @@ def _acquire_orchestrator_lock_or_exit(db_path: Path) -> OrchestratorLock:
     lock = OrchestratorLock(lock_path)
     lock.acquire()
     return lock
+
+
+def _export_db_path_to_env(db_path: Path) -> None:
+    """Make the absolute DB path visible to child processes (e.g. the
+    per-agent MCP servers) that inherit our environment."""
+    os.environ["AGENT_HUB_DB"] = str(db_path)
 
 
 def _configure_logging(level: str) -> None:
@@ -96,6 +103,7 @@ def main() -> None:
 
     # Single-instance lock — refuses to start if another agent_hub is alive.
     lock = _acquire_orchestrator_lock_or_exit(settings.database_path)
+    _export_db_path_to_env(settings.database_path)
 
     registry = AgentRegistry.load()
     runner = AgentRunner(settings=settings, registry=registry)

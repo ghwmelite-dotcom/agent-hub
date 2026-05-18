@@ -67,3 +67,17 @@ class HandoffRow(BaseModel):
     message: str
     enqueued_at: datetime
     claimed_at: datetime | None = None
+
+
+class Worktree(BaseModel):
+    """Row from the worktrees table.
+
+    One row per task, keyed on task_id (PK). cleaned_at is set when
+    the worktree is removed from disk after the task is done.
+    """
+    task_id: int
+    path: str
+    branch: str
+    base_branch: str
+    created_at: datetime
+    cleaned_at: datetime | None = None

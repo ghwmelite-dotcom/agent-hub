@@ -94,3 +94,52 @@ class TaskRepository:
             )
             row = await cur.fetchone()
         return _row_to_task(row) if row else None
+
+    async def list(
+        self,
+        *,
+        status: TaskStatus | None = None,
+        owner: str | None = None,
+        parent_id: int | None = None,
+    ) -> list[Task]:
+        clauses: list[str] = []
+        params: list = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status.value)
+        if owner is not None:
+            clauses.append("owner = ?")
+            params.append(owner)
+        if parent_id is not None:
+            clauses.append("parent_id = ?")
+            params.append(parent_id)
+        where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+        sql = f"SELECT {_TASK_COLS} FROM tasks {where} ORDER BY id ASC"
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(sql, tuple(params))
+            rows = await cur.fetchall()
+        return [_row_to_task(r) for r in rows]
+
+    async def tree(self, root_id: int) -> dict | None:
+        """Returns {'root': Task, 'descendants': list[Task]} or None if root_id is unknown."""
+        root = await self.get(root_id)
+        if root is None:
+            return None
+        descendants: list[Task] = []
+        frontier = [root.id]
+        async with self._connect() as conn:
+            await conn.execute("PRAGMA foreign_keys = ON")
+            conn.row_factory = aiosqlite.Row
+            while frontier:
+                placeholders = ",".join("?" * len(frontier))
+                cur = await conn.execute(
+                    f"SELECT {_TASK_COLS} FROM tasks WHERE parent_id IN ({placeholders})",
+                    tuple(frontier),
+                )
+                rows = await cur.fetchall()
+                children = [_row_to_task(r) for r in rows]
+                descendants.extend(children)
+                frontier = [c.id for c in children]
+        return {"root": root, "descendants": descendants}

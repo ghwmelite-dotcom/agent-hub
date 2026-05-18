@@ -45,3 +45,41 @@ async def test_create_with_parent(repo):
         title="leaf", description="...", origin_chat_id=1, parent_id=parent.id,
     )
     assert child.parent_id == parent.id
+
+
+@pytest.mark.asyncio
+async def test_list_filters_by_status(repo):
+    a = await repo.create(title="a", description="-", origin_chat_id=1)
+    b = await repo.create(title="b", description="-", origin_chat_id=1)
+    # Both are PENDING after creation.
+    pending = await repo.list(status=TaskStatus.PENDING)
+    assert {t.id for t in pending} == {a.id, b.id}
+
+    none = await repo.list(status=TaskStatus.DONE)
+    assert none == []
+
+
+@pytest.mark.asyncio
+async def test_list_filters_by_owner(repo):
+    a = await repo.create(title="a", description="-", origin_chat_id=1, owner="pm")
+    b = await repo.create(title="b", description="-", origin_chat_id=1, owner="architect")
+    pm_tasks = await repo.list(owner="pm")
+    assert [t.id for t in pm_tasks] == [a.id]
+
+
+@pytest.mark.asyncio
+async def test_tree_returns_root_with_descendants(repo):
+    epic = await repo.create(title="epic", description="-", origin_chat_id=1)
+    leaf1 = await repo.create(title="l1", description="-", origin_chat_id=1, parent_id=epic.id)
+    leaf2 = await repo.create(title="l2", description="-", origin_chat_id=1, parent_id=epic.id)
+    grand = await repo.create(title="gl", description="-", origin_chat_id=1, parent_id=leaf1.id)
+
+    tree = await repo.tree(epic.id)
+    assert tree["root"].id == epic.id
+    descendant_ids = {t.id for t in tree["descendants"]}
+    assert descendant_ids == {leaf1.id, leaf2.id, grand.id}
+
+
+@pytest.mark.asyncio
+async def test_tree_unknown_returns_none(repo):
+    assert await repo.tree(99999) is None

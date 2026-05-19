@@ -202,6 +202,13 @@ Check current spend any time with `/status` or `/budget`.
 - Direct commits on `main` are not the workflow — every task gets its own
   `task/<id>-<slug>` branch in an isolated worktree.
 
+## Keeping the laptop from sleeping mid-task
+
+Windows sleep pauses the bot entirely — see `docs/superpowers/runbooks/keep-bot-awake.md`
+for the two-option setup (PowerToys Awake for on-demand override, or a
+lid-close power config that lets the bot run while plugged in with the
+lid closed).
+
 ## Surviving restart
 
 - The single-instance lock at `data/agent_hub.lock` prevents two orchestrators

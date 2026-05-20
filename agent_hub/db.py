@@ -292,6 +292,10 @@ class Database:
     async def set_active_workspace(self, path: str) -> None:
         await self.set_kv(self._ACTIVE_KEY, path)
         await self._touch_recent(path)
+        # Notify the dashboard
+        from agent_hub.dashboard.broker import publish_if_set
+        from agent_hub.dashboard.events import WorkspaceChanged
+        await publish_if_set(WorkspaceChanged(workspace=path))
 
     async def list_recent_workspaces(self) -> list[str]:
         raw = await self.get_kv(self._RECENT_KEY)

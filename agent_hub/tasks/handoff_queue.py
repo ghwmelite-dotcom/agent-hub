@@ -49,6 +49,7 @@ class HandoffQueue:
     async def enqueue(
         self, *, task_id: int, from_agent: str, to_agent: str, message: str,
     ) -> int:
+        enqueued_at = _utcnow_iso()
         async with self._connect() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
             conn.row_factory = aiosqlite.Row
@@ -56,10 +57,22 @@ class HandoffQueue:
                 "INSERT INTO handoff_queue "
                 "(task_id, from_agent, to_agent, message, enqueued_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (task_id, from_agent, to_agent, message, _utcnow_iso()),
+                (task_id, from_agent, to_agent, message, enqueued_at),
             )
             await conn.commit()
-            return cur.lastrowid  # type: ignore[return-value]
+            row_id = cur.lastrowid
+        from agent_hub.dashboard.broker import publish_if_set
+        from agent_hub.dashboard.events import TaskEvent
+        from agent_hub.tasks.repository import _resolve_workspace_for_task
+        workspace = await _resolve_workspace_for_task(self.db_path, task_id)
+        await publish_if_set(TaskEvent(
+            workspace=workspace or "",
+            task_id=task_id,
+            event={"id": row_id, "ts": enqueued_at, "actor": from_agent,
+                   "kind": "handoff",
+                   "body": f"-> {to_agent}: {message[:200]}"},
+        ))
+        return row_id  # type: ignore[return-value]
 
     async def count_pending(self) -> int:
         """Lightweight count of unclaimed rows — for /status."""

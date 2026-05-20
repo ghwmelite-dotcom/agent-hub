@@ -184,6 +184,12 @@ In Telegram, find your bot, send `/start`. The PM will greet you.
 - `/remember <text>` — save a preference for the current workspace
 - `/forget <id>` — archive a memory entry by id
 
+## Live dashboard
+
+While the bot is running, open <http://localhost:8765> for a live read-only
+view of active tasks, pending gates, and the agent activity stream.
+Localhost only — set `DASHBOARD_PORT=0` in `.env` to disable.
+
 ## Budget control
 
 By default there's no cap and you pay for whatever the agents consume. Set one:

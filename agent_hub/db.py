@@ -155,6 +155,44 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 """
 
 
+_SCHEMA_PROJECT_MEMORY = """
+CREATE TABLE IF NOT EXISTS project_memory (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    workspace     TEXT    NOT NULL,
+    type          TEXT    NOT NULL CHECK (type IN (
+                      'project_fact','lesson','preference','decision')),
+    agent_source  TEXT,
+    title         TEXT    NOT NULL,
+    body          TEXT    NOT NULL,
+    related_task  INTEGER REFERENCES tasks(id),
+    created_at    TEXT    NOT NULL,
+    last_used_at  TEXT,
+    use_count     INTEGER NOT NULL DEFAULT 0,
+    archived      INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_pm_workspace_type
+    ON project_memory(workspace, type, archived);
+CREATE INDEX IF NOT EXISTS idx_pm_last_used
+    ON project_memory(workspace, last_used_at);
+"""
+
+
+async def _migrate_agent_sessions_fingerprint(conn: aiosqlite.Connection) -> None:
+    """Idempotent: add `memory_fingerprint` column to `agent_sessions` if missing.
+
+    Holds the SHA-256 of the assembled memory section last seen by this
+    (agent, task) session. Mismatch on next connect → drop the session so
+    the next SDK attach builds a fresh system prompt.
+    """
+    cur = await conn.execute("PRAGMA table_info(agent_sessions)")
+    rows = await cur.fetchall()
+    existing = {r[1] for r in rows}
+    if "memory_fingerprint" not in existing:
+        await conn.execute(
+            "ALTER TABLE agent_sessions ADD COLUMN memory_fingerprint TEXT"
+        )
+
+
 class Database:
     """Thin async wrapper around an SQLite file."""
 
@@ -173,8 +211,10 @@ class Database:
             await conn.executescript(_SCHEMA_GATES)
             await conn.executescript(_SCHEMA_WORKTREES)
             await conn.executescript(_SCHEMA_AGENT_SESSIONS)
+            await conn.executescript(_SCHEMA_PROJECT_MEMORY)
             await _migrate_gates_notified_at(conn)
             await _migrate_tasks_cost_total(conn)
+            await _migrate_agent_sessions_fingerprint(conn)
             await conn.commit()
         log.info("db.ready", path=str(self.path))
 

@@ -17,6 +17,39 @@ import aiosqlite
 _VALID_TYPES = {"project_fact", "lesson", "preference", "decision"}
 
 
+# Per-role memory-type filtering. Roles not listed default to all types.
+_ROLE_TYPE_ALLOWLIST: dict[str, set[str]] = {
+    "pm": {"project_fact", "preference", "lesson", "decision"},
+    "architect": {"project_fact", "preference", "lesson", "decision"},
+    "quant": {"project_fact", "preference", "lesson", "decision"},
+    "reviewer": {"project_fact", "preference", "lesson", "decision"},
+    "fullstack-engineer": {"project_fact", "preference", "lesson"},
+    "implementer": {"project_fact", "preference", "lesson"},
+    "qa": {"project_fact", "lesson"},
+    "backtest-analyst": {"project_fact", "lesson"},
+    "researcher": {"project_fact", "preference"},
+    "senior-uiux-designer": {"project_fact", "preference"},
+}
+
+_TYPE_HEADINGS = {
+    "project_fact": "### Conventions",
+    "preference":   "### Preferences (from user)",
+    "lesson":       "### Recent lessons",
+    "decision":     "### Recent decisions",
+}
+
+# Render order — controls the order sections appear in the assembled section.
+_TYPE_ORDER = ("project_fact", "preference", "lesson", "decision")
+
+# Soft caps per type (how many entries to consider before size capping).
+_TYPE_LIMITS = {
+    "project_fact": 10,
+    "preference":   100,  # all non-archived; cap is defensive
+    "lesson":       5,
+    "decision":     5,
+}
+
+
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -112,3 +145,75 @@ class MemoryStore:
                 (entry_id,),
             )
             await conn.commit()
+
+    async def load_for_prompt(
+        self,
+        *,
+        workspace: str,
+        agent_name: str,
+    ) -> str:
+        """Build the `## Project memory` system-prompt section.
+
+        Returns the assembled markdown string, or "" if nothing applies.
+        Bumps `use_count` and `last_used_at` on every entry included.
+        """
+        allowed = _ROLE_TYPE_ALLOWLIST.get(agent_name, set(_VALID_TYPES))
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+
+            entries_by_type: dict[str, list[dict]] = {}
+            for t in _TYPE_ORDER:
+                if t not in allowed:
+                    continue
+                limit = _TYPE_LIMITS[t]
+                # project_fact orders by use_count DESC, recency tiebreak;
+                # everything else by recency.
+                if t == "project_fact":
+                    order = "use_count DESC, id DESC"
+                else:
+                    order = "id DESC"
+                cur = await conn.execute(
+                    f"SELECT * FROM project_memory "
+                    f"WHERE workspace = ? AND type = ? AND archived = 0 "
+                    f"ORDER BY {order} LIMIT ?",
+                    (workspace, t, limit),
+                )
+                entries_by_type[t] = [dict(r) for r in await cur.fetchall()]
+
+            if not any(entries_by_type.values()):
+                return ""
+
+            # Render
+            lines = [f"## Project memory — {workspace}", ""]
+            for t in _TYPE_ORDER:
+                rows = entries_by_type.get(t, [])
+                if not rows:
+                    continue
+                lines.append(_TYPE_HEADINGS[t])
+                for row in rows:
+                    suffix = (
+                        f"  (used {row['use_count']}×)"
+                        if t == "project_fact" and row["use_count"] > 0
+                        else ""
+                    )
+                    lines.append(f"- {row['title']}{suffix}")
+                lines.append("")
+            section = "\n".join(lines).rstrip() + "\n"
+
+            # Bookkeeping: bump use_count and last_used_at for every included id.
+            included_ids = [
+                row["id"]
+                for rows in entries_by_type.values()
+                for row in rows
+            ]
+            if included_ids:
+                placeholders = ",".join("?" for _ in included_ids)
+                await conn.execute(
+                    f"UPDATE project_memory "
+                    f"SET use_count = use_count + 1, last_used_at = ? "
+                    f"WHERE id IN ({placeholders})",
+                    [_utcnow_iso(), *included_ids],
+                )
+                await conn.commit()
+
+            return section

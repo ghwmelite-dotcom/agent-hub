@@ -77,6 +77,16 @@ class Settings(BaseModel):
         ),
     )
 
+    # Dashboard
+    dashboard_port: int = Field(
+        default=8765,
+        ge=0,
+        description=(
+            "Port for the bundled live dashboard (http://localhost:<port>). "
+            "Set to 0 to disable."
+        ),
+    )
+
     # Computed
     project_root: Path = _PROJECT_ROOT
 
@@ -118,6 +128,7 @@ def load_settings() -> Settings:
         handoff_worker_count=int(os.getenv("HANDOFF_WORKER_COUNT", "3")),
         gate_reminder_hours=float(os.getenv("GATE_REMINDER_HOURS", "24")),
         stuck_turn_threshold=int(os.getenv("STUCK_TURN_THRESHOLD", "12")),
+        dashboard_port=int(os.getenv("DASHBOARD_PORT", "8765")),
     )
 
 

@@ -15,6 +15,8 @@ import structlog
 
 from agent_hub.agents import AgentRegistry, AgentRunner
 from agent_hub.config import Settings, load_settings
+from agent_hub.dashboard.broker import DashboardBroker, set_broker
+from agent_hub.dashboard.server import DashboardServer
 from agent_hub.db import Database
 from agent_hub.orchestrator import Orchestrator
 from agent_hub.orchestrator.lock import OrchestratorLock
@@ -154,6 +156,21 @@ async def _post_init(app, settings: Settings, runner: AgentRunner, db: Database,
     from agent_hub.telegram_bot.surface_telegram import TelegramSurface
     orchestrator.surface = TelegramSurface(app)
 
+    # Dashboard (optional — DASHBOARD_PORT=0 disables)
+    dashboard_server = None
+    if settings.dashboard_port > 0:
+        broker = DashboardBroker(db_path=settings.database_path)
+        set_broker(broker)
+        dashboard_server = DashboardServer(
+            broker=broker,
+            db_path=settings.database_path,
+            port=settings.dashboard_port,
+        )
+        await dashboard_server.start()
+
+    # Stash for shutdown.
+    app.bot_data["dashboard_server"] = dashboard_server
+
     await orchestrator.start()
 
     # Restart-resume scan once at boot, after start so the loops are running.
@@ -167,6 +184,10 @@ async def _post_init(app, settings: Settings, runner: AgentRunner, db: Database,
 
 async def _post_shutdown(app, runner: AgentRunner, orchestrator) -> None:
     """Stop orchestrator and drain agent sessions cleanly on shutdown."""
+    dashboard_server = app.bot_data.get("dashboard_server")
+    if dashboard_server is not None:
+        await dashboard_server.stop()
+    set_broker(None)
     await orchestrator.stop()
     await runner.shutdown()
 

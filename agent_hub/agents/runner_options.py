@@ -48,7 +48,7 @@ def build_mcp_server_config(db_path: Path) -> dict[str, Any]:
     }
 
 
-def build_sdk_options(
+async def build_sdk_options(
     role: AgentRole,
     *,
     cwd: Path | None,
@@ -57,16 +57,25 @@ def build_sdk_options(
 ) -> Any:
     """Construct a ClaudeAgentOptions for the given role + workspace.
 
+    If `cwd` is set, loads project memory for that workspace+role and
+    appends a `## Project memory` section to the role's system prompt.
+
     `session_id` (when set) pins the conversation to a known UUID so a
     later reconnect can pick up where it left off — the Claude Code CLI
     persists conversation history per session_id. Pass the value
     returned by AgentSessionStore.get_or_create.
-
-    Returns the SDK's options object (whose exact class lives in
-    claude_agent_sdk). Keeping the SDK import lazy here so test-time
-    import of this module is cheap.
     """
     import claude_agent_sdk as sdk
+
+    system_prompt = role.system_prompt
+    if cwd is not None:
+        from agent_hub.memory.store import MemoryStore
+
+        memory_section = await MemoryStore(db_path).load_for_prompt(
+            workspace=str(cwd), agent_name=role.name,
+        )
+        if memory_section:
+            system_prompt = f"{system_prompt}\n\n{memory_section}"
 
     # Isolation: the SDK is designed for Claude Code, so by default it
     # exposes Claude Code's full toolset AND loads the user's CLAUDE.md /
@@ -85,7 +94,7 @@ def build_sdk_options(
     #                              permission gating.
     builtin_tools = [t for t in role.allowed_tools if not t.startswith("mcp__")]
     kwargs: dict[str, Any] = {
-        "system_prompt": role.system_prompt,
+        "system_prompt": system_prompt,
         "tools": builtin_tools,
         "allowed_tools": role.allowed_tools,
         "setting_sources": [],

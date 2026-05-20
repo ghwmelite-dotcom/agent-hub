@@ -440,7 +440,13 @@ def build_application(
             await update.effective_chat.send_message("Task id must be an integer.")
             return
         reason = " ".join(context.args[1:])
-        reply = await handle_reject(task_id=task_id, reason=reason, db_path=db_path)
+        workspace = orchestrator.runner.workspace
+        reply = await handle_reject(
+            task_id=task_id,
+            reason=reason,
+            db_path=db_path,
+            workspace=str(workspace) if workspace else None,
+        )
         await update.effective_chat.send_message(reply)
 
     async def _on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

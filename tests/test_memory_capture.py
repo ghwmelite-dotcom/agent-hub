@@ -82,3 +82,39 @@ async def test_on_design_approved_attribution_matches_source(db_path):
     )
     assert len(rows) == 1
     assert rows[0]["agent_source"] == "quant"
+
+
+@pytest.mark.asyncio
+async def test_on_reject_writes_lesson(db_path):
+    from agent_hub.memory.capture import on_reject
+    # Create a real task first to satisfy FK on related_task.
+    repo = TaskRepository(db_path)
+    task = await repo.create(
+        title="Build payments form",
+        description="dummy",
+        origin_chat_id=42,
+    )
+    await on_reject(
+        db_path=db_path,
+        workspace=r"C:\dev\foo",
+        task_id=task.id,
+        task_title="Build payments form",
+        reason="Doesn't handle Stripe webhook retries",
+    )
+    rows = await MemoryStore(db_path).list(
+        workspace=r"C:\dev\foo", type="lesson",
+    )
+    assert len(rows) == 1
+    assert rows[0]["title"] == f"Rejected task #{task.id}: Build payments form"
+    assert "Stripe webhook retries" in rows[0]["body"]
+    assert rows[0]["agent_source"] == "user"
+    assert rows[0]["related_task"] == task.id
+
+
+@pytest.mark.asyncio
+async def test_on_reject_no_workspace_is_noop(db_path):
+    from agent_hub.memory.capture import on_reject
+    await on_reject(
+        db_path=db_path, workspace=None,
+        task_id=1, task_title="t", reason="r",
+    )

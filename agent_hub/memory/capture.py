@@ -42,3 +42,30 @@ async def on_design_approved(
             "memory.capture.on_design_approved.failed",
             task_id=task_id, workspace=workspace,
         )
+
+
+async def on_reject(
+    *,
+    db_path: Path,
+    workspace: str | None,
+    task_id: int,
+    task_title: str,
+    reason: str,
+) -> None:
+    """Called from reject_cmd after the gate is rejected."""
+    if not workspace:
+        return
+    try:
+        await MemoryStore(db_path).insert(
+            workspace=workspace,
+            type="lesson",
+            agent_source="user",
+            title=f"Rejected task #{task_id}: {task_title}",
+            body=reason,
+            related_task=task_id,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception(
+            "memory.capture.on_reject.failed",
+            task_id=task_id, workspace=workspace,
+        )

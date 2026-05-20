@@ -311,10 +311,11 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         async for display_name, event in orch.handle(chat_id=chat_id, message=text):
             if stream is None:
                 current_display = display_name
+                from agent_hub.telegram_bot.formatting import role_header
                 stream = StreamingMessage(
                     chat_id=chat_id,
                     bot=context.bot,
-                    prefix=f"*{display_name}*\n",
+                    prefix=role_header(display_name),
                 )
 
             await _render_event(stream, event)
@@ -361,36 +362,22 @@ async def _on_memory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def _render_event(stream: StreamingMessage, event: AgentEvent) -> None:
+    from agent_hub.telegram_bot.formatting import (
+        escape, humanize_tool, to_markdownv2,
+    )
+
     if isinstance(event, TextChunk):
-        await stream.append(event.text)
+        await stream.append(to_markdownv2(event.text))
     elif isinstance(event, ToolStart):
-        # Short inline indicator so the user sees activity.
-        hint = _summarize_tool(event.tool, event.input)
-        await stream.append(f"\n_{hint}_\n")
+        label = humanize_tool(event.tool, event.input)
+        await stream.append(f"\n_› {escape(label)}_\n")
     elif isinstance(event, ToolEnd):
         if event.is_error:
-            await stream.append("\n_(tool failed)_\n")
+            await stream.append("\n_› failed_\n")
     elif isinstance(event, AgentError):
-        await stream.append(f"\n⚠️ {event.message}\n")
+        await stream.append(f"\n*⚠ {escape(event.message)}*\n")
     elif isinstance(event, TurnDone):
         pass  # Could surface cost/time here later.
-
-
-def _summarize_tool(tool: str, args: dict) -> str:
-    """Compact one-line description of a tool invocation for streaming UI."""
-    if tool in {"Read", "Edit", "Write"}:
-        path = args.get("file_path") or args.get("path") or "?"
-        return f"{tool} {path}"
-    if tool == "Bash":
-        cmd = (args.get("command") or "").strip().splitlines()[0:1]
-        return f"$ {cmd[0] if cmd else ''}"[:80]
-    if tool in {"Grep", "Glob"}:
-        pat = args.get("pattern") or args.get("query") or "?"
-        return f"{tool} {pat}"
-    if tool in {"WebSearch", "WebFetch"}:
-        q = args.get("query") or args.get("url") or "?"
-        return f"{tool} {q}"
-    return tool
 
 
 def _is_within(path: Path, root: Path) -> bool:

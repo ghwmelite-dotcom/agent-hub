@@ -42,3 +42,6 @@ scripts/_*.patch
 
 # Claude Code local-machine permissions cache (shared settings live in .claude/settings.json)
 .claude/settings.local.json
+
+# Superpowers brainstorming session content (mockups, server state, transient)
+.superpowers/

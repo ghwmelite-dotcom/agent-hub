@@ -183,3 +183,18 @@ def set_broker(broker: DashboardBroker | None) -> None:
     """Install or clear the process-wide broker. Called from __main__."""
     global _BROKER
     _BROKER = broker
+
+
+async def publish_if_set(event: Event) -> None:
+    """Publish to the singleton broker if one is installed.
+
+    Repos call this after commits. When no broker is set (tests, or
+    dashboard disabled via DASHBOARD_PORT=0), this is a no-op.
+    """
+    broker = get_broker()
+    if broker is None:
+        return
+    try:
+        await broker.publish(event)
+    except Exception:  # noqa: BLE001
+        log.exception("dashboard.publish_failed")

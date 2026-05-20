@@ -86,7 +86,13 @@ class TaskRepository:
             )
             await conn.commit()
             task_id = cur.lastrowid
-        return await self.get(task_id)  # type: ignore[return-value]
+        new_task = await self.get(task_id)  # type: ignore[return-value]
+        if new_task is not None:
+            from agent_hub.dashboard.broker import publish_if_set
+            from agent_hub.dashboard.events import TaskChanged
+            workspace = await _resolve_workspace_for_task(self.db_path, task_id)
+            await publish_if_set(TaskChanged(workspace=workspace or "", task=_task_to_dict(new_task)))
+        return new_task  # type: ignore[return-value]
 
     async def get(self, task_id: int) -> Task | None:
         async with self._connect() as conn:
@@ -163,7 +169,16 @@ class TaskRepository:
             return cur.lastrowid  # type: ignore[return-value]
 
     async def comment(self, task_id: int, *, actor: str, body: str) -> int:
-        return await self._append_event(task_id, actor=actor, kind="comment", payload={"body": body})
+        event_id = await self._append_event(task_id, actor=actor, kind="comment", payload={"body": body})
+        from agent_hub.dashboard.broker import publish_if_set
+        from agent_hub.dashboard.events import TaskEvent
+        workspace = await _resolve_workspace_for_task(self.db_path, task_id)
+        await publish_if_set(TaskEvent(
+            workspace=workspace or "",
+            task_id=task_id,
+            event={"id": event_id, "ts": _utcnow_iso(), "actor": actor, "kind": "comment", "body": body},
+        ))
+        return event_id
 
     async def latest_comment_by(
         self, task_id: int, actor: str,
@@ -273,7 +288,13 @@ class TaskRepository:
                 payload={"from": current.status.value, "to": status.value},
             )
 
-        return await self.get(task_id)
+        updated_task = await self.get(task_id)
+        if updated_task is not None:
+            from agent_hub.dashboard.broker import publish_if_set
+            from agent_hub.dashboard.events import TaskChanged
+            workspace = await _resolve_workspace_for_task(self.db_path, task_id)
+            await publish_if_set(TaskChanged(workspace=workspace or "", task=_task_to_dict(updated_task)))
+        return updated_task
 
     async def add_cost(self, task_id: int, cost_usd: float) -> None:
         """Accumulate a per-turn cost onto tasks.cost_usd_total.
@@ -367,3 +388,48 @@ class TaskRepository:
             )
             row = await cur.fetchone()
         return float(row[0]) if row else 0.0
+
+
+# ---------------------------------------------------------------------------
+# Dashboard publish helpers
+# ---------------------------------------------------------------------------
+
+async def _resolve_workspace_for_task(db_path, task_id: int) -> str | None:
+    """Look up which workspace a task belongs to.
+
+    Uses the worktree path -> workspace mapping. If no worktree row
+    exists yet (task pre-approval), falls back to the current active
+    workspace.
+    """
+    import aiosqlite as _aiosqlite
+    async with _aiosqlite.connect(db_path) as conn:
+        conn.row_factory = _aiosqlite.Row
+        cur = await conn.execute(
+            "SELECT path FROM worktrees WHERE task_id = ?", (task_id,)
+        )
+        row = await cur.fetchone()
+        if row is not None:
+            from pathlib import Path as _Path
+            return str(_Path(row["path"]).parent.parent)
+        cur = await conn.execute(
+            "SELECT value FROM settings_kv WHERE key = 'active_workspace'"
+        )
+        row = await cur.fetchone()
+        return row["value"] if row else None
+
+
+def _task_to_dict(task: Task) -> dict:
+    """Serialize a Task model to a plain dict for SSE delivery."""
+    return {
+        "id": task.id,
+        "title": task.title,
+        "description": task.description,
+        "status": task.status.value if hasattr(task.status, "value") else str(task.status),
+        "owner": task.owner,
+        "worktree_path": task.worktree_path,
+        "branch_name": task.branch_name,
+        "origin_chat_id": task.origin_chat_id,
+        "created_at": str(task.created_at) if task.created_at else None,
+        "updated_at": str(task.updated_at) if task.updated_at else None,
+        "cost_usd_total": float(task.cost_usd_total or 0),
+    }

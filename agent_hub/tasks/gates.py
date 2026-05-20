@@ -51,16 +51,27 @@ class GateRepository:
         self, *, task_id: int, kind: str,
         artifact_path: str | None = None, summary: str | None = None,
     ) -> int:
+        requested_at = _utcnow_iso()
         async with self._connect() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
             conn.row_factory = aiosqlite.Row
             cur = await conn.execute(
                 "INSERT INTO gates (task_id, kind, artifact_path, summary, requested_at) "
                 "VALUES (?, ?, ?, ?, ?)",
-                (task_id, kind, artifact_path, summary, _utcnow_iso()),
+                (task_id, kind, artifact_path, summary, requested_at),
             )
             await conn.commit()
-            return cur.lastrowid  # type: ignore[return-value]
+            gate_id = cur.lastrowid
+        from agent_hub.dashboard.broker import publish_if_set
+        from agent_hub.dashboard.events import GateChanged
+        from agent_hub.tasks.repository import _resolve_workspace_for_task
+        workspace = await _resolve_workspace_for_task(self.db_path, task_id)
+        await publish_if_set(GateChanged(
+            workspace=workspace or "",
+            gate={"id": gate_id, "task_id": task_id, "kind": kind,
+                  "requested_at": requested_at, "resolved_at": None},
+        ))
+        return gate_id  # type: ignore[return-value]
 
     async def get(self, gate_id: int) -> Gate | None:
         async with self._connect() as conn:
@@ -172,6 +183,8 @@ class GateRepository:
 
     async def resolve(self, *, task_id: int, kind: str, resolution: str) -> None:
         """Resolve the latest pending gate for (task_id, kind). Idempotent."""
+        resolved_at = _utcnow_iso()
+        gate_id: int | None = None
         async with self._connect() as conn:
             await conn.execute("PRAGMA foreign_keys = ON")
             conn.row_factory = aiosqlite.Row
@@ -186,8 +199,18 @@ class GateRepository:
                 raise ValueError(f"No gate exists for task={task_id} kind={kind!r}")
             if row["resolved_at"] is not None:
                 return  # Already resolved — no-op
+            gate_id = row["id"]
             await conn.execute(
                 "UPDATE gates SET resolved_at = ?, resolution = ? WHERE id = ?",
-                (_utcnow_iso(), resolution, row["id"]),
+                (resolved_at, resolution, gate_id),
             )
             await conn.commit()
+        from agent_hub.dashboard.broker import publish_if_set
+        from agent_hub.dashboard.events import GateChanged
+        from agent_hub.tasks.repository import _resolve_workspace_for_task
+        workspace = await _resolve_workspace_for_task(self.db_path, task_id)
+        await publish_if_set(GateChanged(
+            workspace=workspace or "",
+            gate={"id": gate_id, "task_id": task_id, "kind": kind,
+                  "resolved_at": resolved_at, "resolution": resolution},
+        ))

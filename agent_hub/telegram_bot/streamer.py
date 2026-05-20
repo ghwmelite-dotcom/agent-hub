@@ -9,15 +9,20 @@ limit (4096), we send a new message and continue there.
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from dataclasses import dataclass, field
 
 from telegram import Message
-from telegram.constants import ParseMode
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
 TELEGRAM_MAX_CHARS = 4000  # Slightly under the 4096 hard limit for safety.
 EDIT_INTERVAL_SECONDS = 1.5
+
+# Telegram returns this class of error when MarkdownV2 escaping is wrong.
+# We retry once with parse_mode=None so a bad escape never blocks the stream.
+_PARSE_FAILURE_RE = re.compile(r"can'?t parse entities|can'?t find end",
+                               re.IGNORECASE)
 
 
 @dataclass
@@ -28,6 +33,7 @@ class StreamingMessage:
     chat_id: int
     bot: object  # telegram.Bot, kept loose to avoid heavy type imports here
     prefix: str = ""
+    parse_mode: str | None = "MarkdownV2"
     current_message: Message | None = None
     current_text: str = ""
     last_edit_at: float = 0.0
@@ -42,7 +48,6 @@ class StreamingMessage:
         self.pending_text += chunk
         now = time.monotonic()
 
-        # Send the first message immediately so the user sees activity.
         if self.current_message is None:
             await self._send_initial()
             return
@@ -64,6 +69,7 @@ class StreamingMessage:
         self.current_message = await self.bot.send_message(  # type: ignore[attr-defined]
             chat_id=self.chat_id,
             text=text or self.prefix or "…",
+            parse_mode=self.parse_mode,
         )
         self.sent_messages.append(self.current_message)
         self.current_text = text
@@ -71,11 +77,9 @@ class StreamingMessage:
         self.last_edit_at = time.monotonic()
 
     async def _flush(self, force: bool = False) -> None:
-        """Push pending_text into current_message (or roll to a new one)."""
         assert self.current_message is not None
 
         new_text = self.current_text + self.pending_text
-        # If it overflows, split: edit current to the cutoff, send rest as new.
         if len(new_text) > TELEGRAM_MAX_CHARS:
             cutoff = _natural_split(new_text, TELEGRAM_MAX_CHARS)
             keep = new_text[:cutoff]
@@ -84,11 +88,11 @@ class StreamingMessage:
             self.current_text = keep
             self.pending_text = ""
 
-            # Start a new message for the overflow. Continuation marker
-            # keeps it readable on mobile.
+            # Continuation bubble — no prefix repetition.
             self.current_message = await self.bot.send_message(  # type: ignore[attr-defined]
                 chat_id=self.chat_id,
                 text=overflow[:TELEGRAM_MAX_CHARS] or "…",
+                parse_mode=self.parse_mode,
             )
             self.sent_messages.append(self.current_message)
             self.current_text = overflow[:TELEGRAM_MAX_CHARS]
@@ -104,17 +108,28 @@ class StreamingMessage:
     async def _safe_edit(self, text: str) -> None:
         assert self.current_message is not None
         try:
-            await self.current_message.edit_text(text=text)
+            await self.current_message.edit_text(
+                text=text, parse_mode=self.parse_mode,
+            )
         except RetryAfter as exc:
-            # Hit Telegram's rate limit — wait and retry once.
             await asyncio.sleep(exc.retry_after + 0.1)
             try:
-                await self.current_message.edit_text(text=text)
+                await self.current_message.edit_text(
+                    text=text, parse_mode=self.parse_mode,
+                )
             except TelegramError:
                 pass
-        except BadRequest:
-            # "Message is not modified" or similar — ignore.
-            pass
+        except BadRequest as exc:
+            # MarkdownV2 parse error → one-shot retry with parse_mode=None
+            # so a bad escape doesn't block the stream.
+            if self.parse_mode and _PARSE_FAILURE_RE.search(str(exc)):
+                try:
+                    await self.current_message.edit_text(
+                        text=text, parse_mode=None,
+                    )
+                except TelegramError:
+                    pass
+            # else: "Message is not modified" or similar — ignore.
         except TelegramError:
             pass
 
@@ -124,6 +139,6 @@ def _natural_split(text: str, max_len: int) -> int:
     window = text[: max_len + 1]
     for sep in ("\n\n", "\n", ". ", " "):
         idx = window.rfind(sep)
-        if idx > max_len // 2:  # don't split absurdly early
+        if idx > max_len // 2:
             return idx + len(sep)
     return max_len

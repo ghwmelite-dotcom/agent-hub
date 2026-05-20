@@ -125,3 +125,61 @@ class AgentSessionStore:
                 (agent_name, key_id),
             )
             await conn.commit()
+
+    async def get_fingerprint(
+        self,
+        *,
+        agent_name: str,
+        task_id: int | None,
+    ) -> str | None:
+        """Read the last-known memory fingerprint for (agent, task).
+
+        Returns None if no session row exists OR fingerprint is unset.
+        """
+        key_id = _key_task_id(task_id)
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT memory_fingerprint FROM agent_sessions "
+                "WHERE agent_name = ? AND task_id = ?",
+                (agent_name, key_id),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        fp = row["memory_fingerprint"]
+        return str(fp) if fp is not None else None
+
+    async def set_fingerprint(
+        self,
+        *,
+        agent_name: str,
+        task_id: int | None,
+        fingerprint: str,
+    ) -> None:
+        """Persist the current memory fingerprint for (agent, task).
+
+        Upserts: if no session row exists yet, create one with a fresh
+        UUID so the column has somewhere to live. The UUID won't be
+        used by the SDK until get_or_create is called normally.
+        """
+        key_id = _key_task_id(task_id)
+        async with self._connect() as conn:
+            cur = await conn.execute(
+                "UPDATE agent_sessions SET memory_fingerprint = ? "
+                "WHERE agent_name = ? AND task_id = ?",
+                (fingerprint, agent_name, key_id),
+            )
+            if cur.rowcount == 0:
+                # No session row yet — create a placeholder so the
+                # fingerprint has somewhere to live. The session_id is
+                # a fresh UUID; if get_or_create later runs it will see
+                # this row and return this UUID.
+                await conn.execute(
+                    "INSERT INTO agent_sessions "
+                    "(agent_name, task_id, session_id, created_at, memory_fingerprint) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (agent_name, key_id, str(uuid.uuid4()),
+                     _utcnow_iso(), fingerprint),
+                )
+            await conn.commit()

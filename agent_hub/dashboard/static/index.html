@@ -185,7 +185,314 @@
   </main>
 
   <script>
-    /* JS bootstrap is added in Task 6. */
+  (function () {
+    'use strict';
+
+    const $ = (id) => document.getElementById(id);
+
+    // ---- DOM refs ----
+    const elConn = $('conn');
+    const elWorkspace = $('workspace-label');
+    const elActive = $('active-list');
+    const elPending = $('pending-list');
+    const elStream = $('event-stream');
+    const stats = {
+      running:  $('stat-running'),
+      pending:  $('stat-pending'),
+      done24h:  $('stat-done24h'),
+      cost:     $('stat-cost'),
+      detail:   $('cost-detail'),
+    };
+
+    // ---- State ----
+    let snapshot = null;
+    let expandedTaskId = null;
+    let backoffMs = 500;
+
+    // ---- Render ----
+    function setStat(el, value) {
+      if (el.textContent === String(value)) return;
+      el.classList.remove('counting');
+      // Trigger reflow so the animation re-runs.
+      void el.offsetWidth;
+      el.textContent = value;
+      el.classList.add('counting');
+    }
+
+    function renderHeader(snap) {
+      elWorkspace.textContent = snap.workspace
+        ? `workspace: ${snap.workspace}`
+        : 'workspace: —';
+    }
+
+    function renderStats(snap) {
+      const s = snap.stats || {};
+      setStat(stats.running, formatTwoDigit(s.running));
+      setStat(stats.pending, formatTwoDigit(s.pending));
+      setStat(stats.done24h, formatTwoDigit(s.done_24h));
+      // Cost aggregate from active tasks (workspace already filters).
+      const totalCost = (snap.active_tasks || []).reduce(
+        (sum, t) => sum + (t.cost_usd_total || 0), 0
+      );
+      setStat(stats.cost, totalCost > 0 ? `$${totalCost.toFixed(2)}` : '$—');
+      stats.detail.textContent = (snap.active_tasks || [])
+        .filter(t => t.cost_usd_total > 0)
+        .map(t => `#${t.id} $${t.cost_usd_total.toFixed(2)}`)
+        .join(' · ') || 'no spend yet';
+    }
+
+    function formatTwoDigit(n) {
+      const num = Number(n || 0);
+      return num < 10 ? '0' + num : String(num);
+    }
+
+    function renderActiveTasks(snap) {
+      const tasks = snap.active_tasks || [];
+      if (tasks.length === 0) {
+        elActive.innerHTML = '<div class="empty">No active tasks.</div>';
+        return;
+      }
+      elActive.innerHTML = tasks.map(t => renderTaskRow(t)).join('');
+      // Re-attach click handlers.
+      elActive.querySelectorAll('.task-row').forEach(row => {
+        row.addEventListener('click', () => toggleExpand(Number(row.dataset.taskId)));
+      });
+    }
+
+    function renderTaskRow(task) {
+      const isExpanded = task.id === expandedTaskId;
+      return `
+        <div class="task-row ${isExpanded ? 'expanded' : ''}" data-task-id="${task.id}">
+          <span class="blink"></span>
+          <span class="id">#${task.id}</span>
+          <span class="name">${escapeHtml(task.title || '')}</span>
+          <span class="agent">${escapeHtml((task.owner || '').toUpperCase())}</span>
+          <span class="bar-track"><span class="bar" style="animation-delay:${(task.id % 5) * -0.4}s"></span></span>
+          <span class="elapsed">${elapsedFrom(task.updated_at)}</span>
+        </div>
+        <div class="task-detail" data-task-id="${task.id}">
+          ${isExpanded ? '<div class="empty">Loading timeline…</div>' : ''}
+        </div>
+      `;
+    }
+
+    function renderPending(snap) {
+      const gates = snap.pending_gates || [];
+      if (gates.length === 0) {
+        elPending.innerHTML = '<div class="empty">No pending gates.</div>';
+        return;
+      }
+      elPending.innerHTML = gates.map(g => `
+        <div class="pending-row">
+          <span class="blink warn"></span>
+          <span class="id" style="color:var(--amber)">#${g.task_id}</span>
+          <span class="name">${escapeHtml(g.title || '')}</span>
+          <span class="alert">/APPROVE ${g.task_id}</span>
+          <span class="elapsed">${elapsedFrom(g.requested_at)}</span>
+        </div>
+      `).join('');
+    }
+
+    function renderStream(snap) {
+      const events = (snap.recent_events || []).slice(0, 50);
+      if (events.length === 0) {
+        elStream.innerHTML = '<div class="empty">Waiting for events…</div>';
+        return;
+      }
+      elStream.innerHTML = events.map(e => renderEventRow(e)).join('');
+    }
+
+    function renderEventRow(evt) {
+      const ts = (evt.ts || '').replace('T', ' ').slice(11, 19);
+      let body = '';
+      try {
+        const payload = typeof evt.payload_json === 'string'
+          ? JSON.parse(evt.payload_json) : (evt.payload_json || {});
+        body = escapeHtml(payload.body || payload.message || evt.kind || '');
+      } catch {
+        body = escapeHtml(evt.kind || '');
+      }
+      return `
+        <div class="feed-line">
+          <span class="t">[${ts}]</span>
+          <span class="src">${escapeHtml((evt.actor || '').toUpperCase())}</span>
+          <span class="msg">${body}</span>
+        </div>
+      `;
+    }
+
+    function prependStreamRow(evt) {
+      const empty = elStream.querySelector('.empty');
+      if (empty) empty.remove();
+      const wrapper = document.createElement('div');
+      wrapper.innerHTML = renderEventRow(evt);
+      const newRow = wrapper.firstElementChild;
+      newRow.classList.add('fade-in');
+      elStream.insertBefore(newRow, elStream.firstChild);
+      // Cap at 50.
+      while (elStream.children.length > 50) {
+        elStream.removeChild(elStream.lastChild);
+      }
+    }
+
+    function elapsedFrom(iso) {
+      if (!iso) return '—';
+      const then = Date.parse(iso);
+      if (Number.isNaN(then)) return '—';
+      const seconds = Math.max(0, Math.floor((Date.now() - then) / 1000));
+      if (seconds < 60) return seconds + 's';
+      if (seconds < 3600) return Math.floor(seconds / 60) + 'm';
+      return Math.floor(seconds / 3600) + 'h';
+    }
+
+    function escapeHtml(s) {
+      return String(s).replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+    }
+
+    // ---- Inline expand ----
+    async function toggleExpand(taskId) {
+      if (expandedTaskId === taskId) {
+        expandedTaskId = null;
+        renderActiveTasks(snapshot);
+        return;
+      }
+      expandedTaskId = taskId;
+      renderActiveTasks(snapshot);
+
+      try {
+        const resp = await fetch(`/api/task/${taskId}`);
+        if (!resp.ok) return;
+        const data = await resp.json();
+        const detail = document.querySelector(
+          `.task-detail[data-task-id="${taskId}"]`
+        );
+        if (!detail) return;
+        detail.innerHTML = data.events.map(e => {
+          let body = '';
+          try {
+            const p = typeof e.payload_json === 'string'
+              ? JSON.parse(e.payload_json) : (e.payload_json || {});
+            body = escapeHtml(p.body || p.message || e.kind || '');
+          } catch {
+            body = escapeHtml(e.kind || '');
+          }
+          const ts = (e.ts || '').replace('T', ' ').slice(0, 19);
+          return `
+            <div class="timeline-row">
+              <span class="ts">${ts}</span>
+              <span class="actor">${escapeHtml((e.actor || '').toUpperCase())}</span>
+              <span>${body}</span>
+            </div>
+          `;
+        }).join('') || '<div class="empty">No events yet.</div>';
+      } catch (err) {
+        // Silent — keep the row expanded with "Loading…" text.
+      }
+    }
+
+    // ---- Connection ----
+    function setConnected(ok) {
+      if (ok) {
+        elConn.classList.remove('disconnected');
+        elConn.innerHTML = '<span class="dot"></span> ONLINE';
+      } else {
+        elConn.classList.add('disconnected');
+        elConn.innerHTML = '<span class="dot"></span> RECONNECTING…';
+      }
+    }
+
+    async function loadSnapshot() {
+      try {
+        const resp = await fetch('/api/state');
+        if (!resp.ok) throw new Error('snapshot failed');
+        snapshot = await resp.json();
+        renderHeader(snapshot);
+        renderStats(snapshot);
+        renderActiveTasks(snapshot);
+        renderPending(snapshot);
+        renderStream(snapshot);
+      } catch (err) {
+        // Retry on next reconnect.
+      }
+    }
+
+    function applyEvent(evt) {
+      if (!snapshot) return;
+      if (evt.kind === 'workspace_changed') {
+        // Re-snapshot — workspace filter on the server side changes too.
+        loadSnapshot();
+        return;
+      }
+      if (evt.kind === 'task_changed') {
+        // Replace existing task entry or insert new one.
+        const list = snapshot.active_tasks = snapshot.active_tasks || [];
+        const idx = list.findIndex(t => t.id === evt.task.id);
+        const isTerminal = ['done', 'blocked', 'cancelled']
+          .includes(evt.task.status);
+        if (isTerminal && idx >= 0) {
+          list.splice(idx, 1);
+        } else if (idx >= 0) {
+          list[idx] = evt.task;
+        } else if (!isTerminal) {
+          list.unshift(evt.task);
+        }
+        renderActiveTasks(snapshot);
+        renderStats(snapshot);
+        return;
+      }
+      if (evt.kind === 'gate_changed') {
+        // Pending if resolved_at is falsy.
+        const list = snapshot.pending_gates = snapshot.pending_gates || [];
+        const idx = list.findIndex(g => g.id === evt.gate.id);
+        if (evt.gate.resolved_at) {
+          if (idx >= 0) list.splice(idx, 1);
+        } else if (idx >= 0) {
+          list[idx] = evt.gate;
+        } else {
+          list.push(evt.gate);
+        }
+        renderPending(snapshot);
+        renderStats(snapshot);
+        return;
+      }
+      if (evt.kind === 'task_event') {
+        const list = snapshot.recent_events = snapshot.recent_events || [];
+        list.unshift(evt.event);
+        snapshot.recent_events = list.slice(0, 50);
+        prependStreamRow(evt.event);
+        return;
+      }
+    }
+
+    function connectSSE() {
+      const es = new EventSource('/api/events');
+      es.onopen = () => {
+        backoffMs = 500;
+        setConnected(true);
+      };
+      es.onerror = () => {
+        es.close();
+        setConnected(false);
+        setTimeout(() => {
+          loadSnapshot();
+          connectSSE();
+        }, backoffMs);
+        backoffMs = Math.min(backoffMs * 4, 8000);
+      };
+      es.onmessage = (msg) => {
+        try {
+          applyEvent(JSON.parse(msg.data));
+        } catch {
+          // Ignore malformed.
+        }
+      };
+    }
+
+    // ---- Boot ----
+    loadSnapshot().then(connectSSE);
+  })();
   </script>
 </body>
 </html>

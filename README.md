@@ -178,6 +178,12 @@ In Telegram, find your bot, send `/start`. The PM will greet you.
 - `/budget [amount|off]` — view, set, or disable the cumulative spend cap
 - `/help` — list all commands
 
+**Memory** (project-scoped, shared across agents)
+- `/memory [facts|lessons|preferences|decisions]` — list project memory for the current workspace
+- `/memory clear [confirm]` — archive all memory for the current workspace
+- `/remember <text>` — save a preference for the current workspace
+- `/forget <id>` — archive a memory entry by id
+
 ## Budget control
 
 By default there's no cap and you pay for whatever the agents consume. Set one:
@@ -238,7 +244,8 @@ agent-hub/
 │   │   ├── runner_options.py         # ClaudeAgentOptions builder
 │   │   └── session_store.py          # (agent, task_id) → session_id persistence
 │   ├── mcp_server/                   # MCP tools the agents call
-│   │   └── tools/                    #   tasks.* handoff gate.* worktree.*
+│   │   └── tools/                    #   tasks.* handoff gate.* worktree.* memory.note
+│   ├── memory/                       # Project-scoped shared memory + capture hooks
 │   ├── orchestrator/                 # Routing + tick loops + push
 │   ├── telegram_bot/                 # Telegram frontend + command handlers
 │   └── tasks/                        # Repositories (tasks, gates, handoffs, worktrees)

@@ -118,3 +118,68 @@ async def test_on_reject_no_workspace_is_noop(db_path):
         db_path=db_path, workspace=None,
         task_id=1, task_title="t", reason="r",
     )
+
+
+@pytest.mark.asyncio
+async def test_reviewer_kickback_writes_lesson(db_path):
+    """from=reviewer, to=fullstack-engineer is interpreted as a kickback."""
+    from agent_hub.memory.capture import on_handoff_kickback
+    task = await TaskRepository(db_path).create(
+        title="t", description="d", origin_chat_id=42,
+    )
+    await on_handoff_kickback(
+        db_path=db_path,
+        workspace=r"C:\dev\foo",
+        task_id=task.id,
+        from_agent="reviewer",
+        to_agent="fullstack-engineer",
+        message="Unawaited promise in handlers.ts — please add `await`.",
+    )
+    rows = await MemoryStore(db_path).list(
+        workspace=r"C:\dev\foo", type="lesson",
+    )
+    assert len(rows) == 1
+    assert rows[0]["agent_source"] == "reviewer"
+    assert "Unawaited promise" in rows[0]["body"]
+    assert rows[0]["related_task"] == task.id
+
+
+@pytest.mark.asyncio
+async def test_qa_fail_writes_lesson(db_path):
+    from agent_hub.memory.capture import on_handoff_kickback
+    task = await TaskRepository(db_path).create(
+        title="t", description="d", origin_chat_id=42,
+    )
+    await on_handoff_kickback(
+        db_path=db_path,
+        workspace=r"C:\dev\foo",
+        task_id=task.id,
+        from_agent="qa",
+        to_agent="fullstack-engineer",
+        message="Failing test: tests/test_x.py::test_y",
+    )
+    rows = await MemoryStore(db_path).list(
+        workspace=r"C:\dev\foo", type="lesson",
+    )
+    assert rows[0]["agent_source"] == "qa"
+
+
+@pytest.mark.asyncio
+async def test_normal_forward_handoff_does_not_capture(db_path):
+    """fullstack → reviewer is normal forward progress — no lesson."""
+    from agent_hub.memory.capture import on_handoff_kickback
+    task = await TaskRepository(db_path).create(
+        title="t", description="d", origin_chat_id=42,
+    )
+    await on_handoff_kickback(
+        db_path=db_path,
+        workspace=r"C:\dev\foo",
+        task_id=task.id,
+        from_agent="fullstack-engineer",
+        to_agent="reviewer",
+        message="Done, ready for review",
+    )
+    rows = await MemoryStore(db_path).list(
+        workspace=r"C:\dev\foo", type="lesson",
+    )
+    assert rows == []

@@ -14,7 +14,7 @@ from typing import Any
 from agent_hub.agents.registry import AgentRole
 
 
-def build_mcp_server_config(db_path: Path) -> dict[str, Any]:
+def build_mcp_server_config(db_path: Path, cwd: Path | None = None) -> dict[str, Any]:
     """The stdio launch spec passed to ClaudeAgentOptions.mcp_servers.
 
     Keyed under "agent_hub" so MCP tool names land in the
@@ -29,21 +29,27 @@ def build_mcp_server_config(db_path: Path) -> dict[str, Any]:
     `agent_hub` isn't on sys.path unless we add the project root. We
     derive the root from this file's location (.../agent_hub/agents/
     runner_options.py) — parents[2] is the repo root.
+
+    `cwd`: when provided, sets AGENT_HUB_WORKSPACE in the subprocess env
+    so the memory.note MCP tool knows which workspace to scope facts to.
     """
     project_root = Path(__file__).resolve().parents[2]
     existing_pp = os.environ.get("PYTHONPATH", "")
     python_path = (
         f"{project_root}{os.pathsep}{existing_pp}" if existing_pp else str(project_root)
     )
+    env: dict[str, str] = {
+        **os.environ,
+        "AGENT_HUB_DB": str(db_path),
+        "PYTHONPATH": python_path,
+    }
+    if cwd is not None:
+        env["AGENT_HUB_WORKSPACE"] = str(cwd)
     return {
         "agent_hub": {
             "command": sys.executable,
             "args": ["-m", "agent_hub.mcp_server"],
-            "env": {
-                **os.environ,
-                "AGENT_HUB_DB": str(db_path),
-                "PYTHONPATH": python_path,
-            },
+            "env": env,
         },
     }
 
@@ -101,7 +107,7 @@ async def build_sdk_options(
         "skills": [],
         "model": role.model,
         "cwd": str(cwd) if cwd else None,
-        "mcp_servers": build_mcp_server_config(db_path),
+        "mcp_servers": build_mcp_server_config(db_path, cwd=cwd),
     }
     if session_id is not None:
         kwargs["session_id"] = session_id

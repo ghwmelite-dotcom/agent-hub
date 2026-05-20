@@ -76,16 +76,11 @@ async def handle_approve(
     # Capture the design as a decision-log entry.
     from agent_hub.memory.capture import on_design_approved
 
-    design_text = (
-        await repo.latest_comment_by(task_id, "architect")
-        or await repo.latest_comment_by(task_id, "quant")
-        or ""
-    )
+    arch_text = await repo.latest_comment_by(task_id, "architect")
+    quant_text = await repo.latest_comment_by(task_id, "quant") if not arch_text else None
+    design_text = arch_text or quant_text or ""
     if design_text:
-        captured_agent = (
-            "quant"
-            if await repo.latest_comment_by(task_id, "quant") else "architect"
-        )
+        captured_agent = "architect" if arch_text else "quant"
         await on_design_approved(
             db_path=db_path,
             workspace=str(repo_root) if repo_root else None,

@@ -56,3 +56,29 @@ async def test_on_design_approved_no_workspace_is_noop(db_path):
         agent_name="architect",
     )
     # No assertion on rows count by workspace=None — table is just empty.
+
+
+@pytest.mark.asyncio
+async def test_on_design_approved_attribution_matches_source(db_path):
+    """Agent attribution must match the actual source of design_text."""
+    # Create a real task so the FK on related_task is satisfied.
+    repo = TaskRepository(db_path)
+    task = await repo.create(
+        title="EA: scalper variant",
+        description="desc",
+        origin_chat_id=1,
+    )
+    # When agent_name='quant' is passed, the saved row uses 'quant'.
+    await on_design_approved(
+        db_path=db_path,
+        workspace=r"C:\dev\foo",
+        task_id=task.id,
+        task_title="EA: scalper variant",
+        design_text="ATR-based stops with regime filter.",
+        agent_name="quant",
+    )
+    rows = await MemoryStore(db_path).list(
+        workspace=r"C:\dev\foo", type="decision",
+    )
+    assert len(rows) == 1
+    assert rows[0]["agent_source"] == "quant"

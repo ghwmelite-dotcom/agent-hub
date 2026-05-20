@@ -167,3 +167,72 @@ async def test_load_for_prompt_unknown_agent_falls_back_to_all_types(store):
                        title="FACT", body="b")
     section = await store.load_for_prompt(workspace=ws, agent_name="brand-new-role")
     assert "FACT" in section
+
+
+@pytest.mark.asyncio
+async def test_load_for_prompt_enforces_size_cap(store):
+    """When section exceeds the cap, lessons drop first, then decisions.
+    Facts and preferences are never dropped."""
+    ws = r"C:\dev\foo"
+    # Big titles to blow the cap quickly. Cap is ~2000 tokens ≈ 8000 chars.
+    big = "X" * 1000
+    for i in range(4):
+        await store.insert(workspace=ws, type="lesson", agent_source="reviewer",
+                           title=f"L{i} {big}", body="b")
+    for i in range(4):
+        await store.insert(workspace=ws, type="decision", agent_source="architect",
+                           title=f"D{i} {big}", body="b")
+    await store.insert(workspace=ws, type="project_fact", agent_source="architect",
+                       title=f"FACT {big}", body="b")
+    section = await store.load_for_prompt(workspace=ws, agent_name="pm")
+    # Fact survives
+    assert "FACT" in section
+    # Section is under the byte cap
+    assert len(section) <= 8000
+    # At least one lesson was dropped
+    assert section.count("L") < 4 + 4 + 1  # not all 9 entries fit
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_stable_for_same_inputs(store):
+    ws = r"C:\dev\foo"
+    await store.insert(workspace=ws, type="project_fact", agent_source="architect",
+                       title="X", body="b")
+    fp1 = await store.fingerprint(workspace=ws, agent_name="pm")
+    fp2 = await store.fingerprint(workspace=ws, agent_name="pm")
+    assert fp1 == fp2
+    assert len(fp1) == 64  # SHA-256 hex
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_changes_after_insert(store):
+    ws = r"C:\dev\foo"
+    fp1 = await store.fingerprint(workspace=ws, agent_name="pm")
+    await store.insert(workspace=ws, type="project_fact", agent_source="architect",
+                       title="X", body="b")
+    fp2 = await store.fingerprint(workspace=ws, agent_name="pm")
+    assert fp1 != fp2
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_different_for_different_roles(store):
+    """Different per-role filtering → different fingerprint."""
+    ws = r"C:\dev\foo"
+    await store.insert(workspace=ws, type="decision", agent_source="architect",
+                       title="X", body="b")
+    fp_pm = await store.fingerprint(workspace=ws, agent_name="pm")  # sees decision
+    fp_qa = await store.fingerprint(workspace=ws, agent_name="qa")  # does not
+    assert fp_pm != fp_qa
+
+
+@pytest.mark.asyncio
+async def test_fingerprint_does_not_bump_use_count(store):
+    """fingerprint() is a read-only helper — must not mutate."""
+    ws = r"C:\dev\foo"
+    new_id = await store.insert(
+        workspace=ws, type="lesson", agent_source="reviewer",
+        title="X", body="b",
+    )
+    await store.fingerprint(workspace=ws, agent_name="pm")
+    rows = await store.list(workspace=ws, type="lesson")
+    assert rows[0]["use_count"] == 0

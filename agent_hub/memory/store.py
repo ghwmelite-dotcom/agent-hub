@@ -7,12 +7,15 @@ injected into agent system prompts at task start (see agents/runner_options.py).
 
 from __future__ import annotations
 
+import hashlib
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 import aiosqlite
 
+
+_MEMORY_BYTE_CAP = 8000  # ~2000 tokens at ~4 chars/token
 
 _VALID_TYPES = {"project_fact", "lesson", "preference", "decision"}
 
@@ -65,6 +68,32 @@ class MemoryStore:
 
     def _connect(self) -> Any:
         return aiosqlite.connect(self.db_path)
+
+    def _render_section(
+        self,
+        workspace: str,
+        entries_by_type: dict[str, list[dict]],
+    ) -> tuple[str, list[int]]:
+        """Return (rendered_section, included_ids)."""
+        if not any(entries_by_type.values()):
+            return "", []
+        lines = [f"## Project memory — {workspace}", ""]
+        included_ids: list[int] = []
+        for t in _TYPE_ORDER:
+            rows = entries_by_type.get(t, [])
+            if not rows:
+                continue
+            lines.append(_TYPE_HEADINGS[t])
+            for row in rows:
+                suffix = (
+                    f"  (used {row['use_count']}×)"
+                    if t == "project_fact" and row["use_count"] > 0
+                    else ""
+                )
+                lines.append(f"- {row['title']}{suffix}")
+                included_ids.append(int(row["id"]))
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n", included_ids
 
     async def insert(
         self,
@@ -183,29 +212,25 @@ class MemoryStore:
             if not any(entries_by_type.values()):
                 return ""
 
-            # Render
-            lines = [f"## Project memory — {workspace}", ""]
-            for t in _TYPE_ORDER:
-                rows = entries_by_type.get(t, [])
-                if not rows:
-                    continue
-                lines.append(_TYPE_HEADINGS[t])
-                for row in rows:
-                    suffix = (
-                        f"  (used {row['use_count']}×)"
-                        if t == "project_fact" and row["use_count"] > 0
-                        else ""
-                    )
-                    lines.append(f"- {row['title']}{suffix}")
-                lines.append("")
-            section = "\n".join(lines).rstrip() + "\n"
+            # Render with size cap. Drop lessons first, then decisions if
+            # over the byte cap. Facts and preferences are never dropped.
+            droppable_order = ("lesson", "decision")
+            while True:
+                section, included_ids = self._render_section(
+                    workspace, entries_by_type,
+                )
+                if len(section) <= _MEMORY_BYTE_CAP:
+                    break
+                dropped = False
+                for t in droppable_order:
+                    if entries_by_type.get(t):
+                        entries_by_type[t].pop()  # drop oldest of that type
+                        dropped = True
+                        break
+                if not dropped:
+                    break  # can't shrink further; let it through
 
-            # Bookkeeping: bump use_count and last_used_at for every included id.
-            included_ids = [
-                row["id"]
-                for rows in entries_by_type.values()
-                for row in rows
-            ]
+            # Bookkeeping
             if included_ids:
                 placeholders = ",".join("?" for _ in included_ids)
                 await conn.execute(
@@ -217,3 +242,39 @@ class MemoryStore:
                 await conn.commit()
 
             return section
+
+    async def fingerprint(
+        self,
+        *,
+        workspace: str,
+        agent_name: str,
+    ) -> str:
+        """SHA-256 hex of the assembled section for (workspace, agent).
+
+        Read-only: does NOT bump use_count or last_used_at. Used by the
+        runner to detect that memory has changed since the SDK session
+        was last attached, so we can drop the session and rebuild the
+        system prompt.
+        """
+        allowed = _ROLE_TYPE_ALLOWLIST.get(agent_name, set(_VALID_TYPES))
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            entries_by_type: dict[str, list[dict]] = {}
+            for t in _TYPE_ORDER:
+                if t not in allowed:
+                    continue
+                limit = _TYPE_LIMITS[t]
+                if t == "project_fact":
+                    order = "use_count DESC, id DESC"
+                else:
+                    order = "id DESC"
+                cur = await conn.execute(
+                    f"SELECT * FROM project_memory "
+                    f"WHERE workspace = ? AND type = ? AND archived = 0 "
+                    f"ORDER BY {order} LIMIT ?",
+                    (workspace, t, limit),
+                )
+                entries_by_type[t] = [dict(r) for r in await cur.fetchall()]
+
+        section, _ = self._render_section(workspace, entries_by_type)
+        return hashlib.sha256(section.encode("utf-8")).hexdigest()

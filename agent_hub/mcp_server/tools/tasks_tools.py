@@ -129,7 +129,13 @@ def register(server: FastMCP, db_path: Path) -> None:
 
     @server.tool(name="tasks.comment")
     @safe_tool
-    async def tasks_comment(task_id: int, body: str, actor: str = "agent") -> dict:
+    async def tasks_comment(
+        task_id: int,
+        body: str,
+        actor: str | None = None,
+    ) -> dict:
         """Append a comment event to the task. Returns the new event_id."""
-        event_id = await repo.comment(task_id, actor=actor, body=body)
+        import os
+        effective_actor = actor or os.environ.get("AGENT_HUB_AGENT_NAME") or "agent"
+        event_id = await repo.comment(task_id, actor=effective_actor, body=body)
         return {"event_id": event_id}

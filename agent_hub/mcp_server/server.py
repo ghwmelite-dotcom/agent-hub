@@ -40,9 +40,11 @@ def build_server() -> FastMCP:
     from agent_hub.mcp_server.tools.handoff_tool import register as register_handoff
     from agent_hub.mcp_server.tools.gate_tools import register as register_gate
     from agent_hub.mcp_server.tools.worktree_tools import register as register_worktree
+    from agent_hub.mcp_server.tools.memory_tools import register as register_memory
 
     register_tasks(server, db_path)
     register_handoff(server, db_path)
     register_gate(server, db_path)
     register_worktree(server, db_path)
+    register_memory(server, db_path)
     return server

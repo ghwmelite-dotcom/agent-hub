@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -104,6 +105,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/resume <id> — resume a stale/blocked task\n"
         "/status — orchestrator health snapshot\n"
         "/budget [amount|off] — view, set, or disable the spend cap\n\n"
+        "*Memory*\n"
+        "/memory [facts|lessons|preferences|decisions] — list project memory\n"
+        "/memory clear [confirm] — archive all memory for current workspace\n"
+        "/remember <text> — save a preference for the current workspace\n"
+        "/forget <id> — archive a memory entry by id\n\n"
         "Address an agent directly with `@name` (e.g. `@architect`, `@impl`)."
     )
 
@@ -272,6 +278,29 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     chat_id = update.effective_chat.id
     text = update.message.text
 
+    # ------------------------------------------------------------------
+    # Preference candidate detection — offer inline Save/Skip before
+    # handing the message to the PM.
+    # ------------------------------------------------------------------
+    from agent_hub.memory.preferences import looks_like_preference
+
+    if looks_like_preference(text):
+        workspace = (
+            str(orch.runner.workspace) if orch.runner.workspace else None
+        )
+        if workspace:
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("💾 Save preference", callback_data="memory_save"),
+                InlineKeyboardButton("Skip", callback_data="memory_skip"),
+            ]])
+            pending: dict[int, tuple[str, str]] = (
+                context.application.bot_data.setdefault("pending_preferences", {})
+            )
+            pending[update.message.message_id] = (workspace, text)
+            await update.message.reply_text(
+                "💡 Save as project preference?", reply_markup=kb,
+            )
+
     # Show "typing…" while we work.
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
@@ -298,6 +327,37 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             chat_id=chat_id,
             text=f"Sorry — something broke handling that message:\n`{exc}`",
         )
+
+
+async def _on_memory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle memory_save / memory_skip callback queries from the inline keyboard."""
+    from agent_hub.memory.capture import on_user_preference_save
+
+    settings: Settings = context.application.bot_data["settings"]
+    query = update.callback_query
+    await query.answer()
+
+    reply_to = query.message.reply_to_message
+    key = reply_to.message_id if reply_to else None
+    pending: dict[int, tuple[str, str]] = context.application.bot_data.get(
+        "pending_preferences", {}
+    )
+    candidate = pending.pop(key, None) if key is not None else None
+
+    if candidate is None:
+        await query.edit_message_text("(candidate expired)")
+        return
+
+    workspace, text = candidate
+    if query.data == "memory_save":
+        await on_user_preference_save(
+            db_path=settings.database_path,
+            workspace=workspace,
+            body=text,
+        )
+        await query.edit_message_text("✅ Saved as preference.")
+    else:
+        await query.edit_message_text("Skipped.")
 
 
 async def _render_event(stream: StreamingMessage, event: AgentEvent) -> None:
@@ -359,6 +419,7 @@ def build_application(
 
     app.bot_data["settings"] = settings
     app.bot_data["orchestrator"] = orchestrator
+    app.bot_data["pending_preferences"] = {}  # message_id → (workspace, text)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
@@ -380,6 +441,12 @@ def build_application(
     from agent_hub.telegram_bot.commands.tasks_cmd import handle_tasks
     from agent_hub.telegram_bot.commands.task_cmd import handle_task
     from agent_hub.telegram_bot.commands.resume_cmd import handle_resume
+    from agent_hub.telegram_bot.commands.memory_cmd import (
+        handle_memory_list,
+        handle_memory_clear,
+        handle_forget,
+        handle_remember,
+    )
 
     db_path = settings.database_path
 
@@ -440,7 +507,13 @@ def build_application(
             await update.effective_chat.send_message("Task id must be an integer.")
             return
         reason = " ".join(context.args[1:])
-        reply = await handle_reject(task_id=task_id, reason=reason, db_path=db_path)
+        workspace = orchestrator.runner.workspace
+        reply = await handle_reject(
+            task_id=task_id,
+            reason=reason,
+            db_path=db_path,
+            workspace=str(workspace) if workspace else None,
+        )
         await update.effective_chat.send_message(reply)
 
     async def _on_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -479,6 +552,48 @@ def build_application(
         reply = await handle_resume(task_id=task_id, db_path=db_path)
         await update.effective_chat.send_message(reply)
 
+    async def _on_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        args = context.args or []
+        workspace = str(orchestrator.runner.workspace) if orchestrator.runner.workspace else None
+        if args and args[0].lower() == "clear":
+            confirm = len(args) > 1 and args[1].lower() == "confirm"
+            reply = await handle_memory_clear(
+                db_path=db_path, workspace=workspace, confirm=confirm,
+            )
+        else:
+            type_filter = args[0].lower() if args else None
+            reply = await handle_memory_list(
+                db_path=db_path, workspace=workspace, type_filter=type_filter,
+            )
+        await update.effective_chat.send_message(reply)
+
+    async def _on_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await update.effective_chat.send_message("Usage: /forget <id>")
+            return
+        try:
+            entry_id = int(context.args[0])
+        except ValueError:
+            await update.effective_chat.send_message("Entry id must be an integer.")
+            return
+        workspace = str(orchestrator.runner.workspace) if orchestrator.runner.workspace else None
+        reply = await handle_forget(
+            db_path=db_path, entry_id=entry_id, workspace=workspace,
+        )
+        await update.effective_chat.send_message(reply)
+
+    async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        args = context.args or []
+        if not args:
+            await update.effective_chat.send_message("Usage: /remember <preference text>")
+            return
+        text = " ".join(args)
+        workspace = str(orchestrator.runner.workspace) if orchestrator.runner.workspace else None
+        reply = await handle_remember(
+            db_path=db_path, workspace=workspace, text=text,
+        )
+        await update.effective_chat.send_message(reply)
+
     app.add_handler(CommandHandler("tasks", _on_tasks))
     app.add_handler(CommandHandler("task", _on_task))
     app.add_handler(CommandHandler("approve", _on_approve))
@@ -487,6 +602,14 @@ def build_application(
     app.add_handler(CommandHandler("resume", _on_resume))
     app.add_handler(CommandHandler("status", _on_status))
     app.add_handler(CommandHandler("budget", _on_budget))
+    app.add_handler(CommandHandler("memory", _on_memory))
+    app.add_handler(CommandHandler("forget", _on_forget))
+    app.add_handler(CommandHandler("remember", _on_remember))
+
+    # Memory inline-keyboard callback — must come before the catch-all text handler
+    app.add_handler(
+        CallbackQueryHandler(_on_memory_callback, pattern=r"^memory_(save|skip)$")
+    )
 
     # Catch-all — must come AFTER all CommandHandlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))

@@ -14,7 +14,9 @@ from agent_hub.tasks.handoff_queue import HandoffQueue
 from agent_hub.tasks.repository import TaskRepository
 
 
-async def handle_reject(*, task_id: int, reason: str, db_path: Path) -> str:
+async def handle_reject(
+    *, task_id: int, reason: str, db_path: Path, workspace: str | None = None
+) -> str:
     reason = (reason or "").strip()
     if not reason:
         return "Reject requires a reason: /reject <id> <reason>"
@@ -35,6 +37,15 @@ async def handle_reject(*, task_id: int, reason: str, db_path: Path) -> str:
 
     await gates.resolve(task_id=task_id, kind="design", resolution="rejected")
     await repo.comment(task_id, actor="user", body=f"Rejected: {reason}")
+
+    from agent_hub.memory.capture import on_reject
+    await on_reject(
+        db_path=db_path,
+        workspace=workspace,
+        task_id=task_id,
+        task_title=task.title,
+        reason=reason,
+    )
 
     try:
         await repo.update(task_id, status=TaskStatus.PLANNING)

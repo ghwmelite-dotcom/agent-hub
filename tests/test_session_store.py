@@ -97,3 +97,38 @@ async def test_session_persists_across_store_instances(temp_db_path):
         agent_name="pm", task_id=1,
     )
     assert s1 == s2
+
+
+@pytest.mark.asyncio
+async def test_get_fingerprint_returns_none_when_unset(store):
+    await store.get_or_create(agent_name="pm", task_id=1)
+    fp = await store.get_fingerprint(agent_name="pm", task_id=1)
+    assert fp is None
+
+
+@pytest.mark.asyncio
+async def test_set_and_get_fingerprint(store):
+    await store.get_or_create(agent_name="pm", task_id=1)
+    await store.set_fingerprint(
+        agent_name="pm", task_id=1, fingerprint="abc123",
+    )
+    fp = await store.get_fingerprint(agent_name="pm", task_id=1)
+    assert fp == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_set_fingerprint_creates_row_if_missing(store):
+    """No session created yet — set_fingerprint should still work (upsert)."""
+    await store.set_fingerprint(
+        agent_name="pm", task_id=99, fingerprint="zzz",
+    )
+    fp = await store.get_fingerprint(agent_name="pm", task_id=99)
+    assert fp == "zzz"
+
+
+@pytest.mark.asyncio
+async def test_forget_clears_fingerprint(store):
+    await store.get_or_create(agent_name="pm", task_id=1)
+    await store.set_fingerprint(agent_name="pm", task_id=1, fingerprint="x")
+    await store.forget(agent_name="pm", task_id=1)
+    assert await store.get_fingerprint(agent_name="pm", task_id=1) is None

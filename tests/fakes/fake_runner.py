@@ -27,6 +27,10 @@ from agent_hub.agents.runner import (
 class FakeAgentRunner:
     """Drop-in replacement for AgentRunner in tests."""
 
+    # Matches the real AgentRunner.workspace property; None means "no workspace
+    # configured", which makes on_handoff_kickback a no-op in the dispatch loop.
+    workspace = None
+
     def __init__(self) -> None:
         self._scripts: dict[tuple[str, int | None], deque[list[AgentEvent]]] = defaultdict(deque)
         self.calls: list[tuple[str, str, int | None]] = []

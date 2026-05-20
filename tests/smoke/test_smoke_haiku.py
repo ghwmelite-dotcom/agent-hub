@@ -21,6 +21,7 @@ from agent_hub.agents import AgentRegistry, AgentRunner
 from agent_hub.agents.registry import AgentRole
 from agent_hub.config import Settings
 from agent_hub.db import Database
+from agent_hub.memory.store import MemoryStore
 from agent_hub.orchestrator import Orchestrator
 from agent_hub.state_machine import TaskStatus
 from agent_hub.tasks.handoff_queue import HandoffQueue
@@ -160,6 +161,22 @@ async def test_haiku_end_to_end_simple_task(tmp_path: Path):
         assert final_status == TaskStatus.DONE, (
             f"Task did not reach done; final status: {final_status}. "
             f"DMs captured: {[m for _, m in surface.sent]}"
+        )
+
+        # Memory capture: /approve should have recorded a `decision` entry
+        # for the architect's design.
+        decisions = await MemoryStore(db_path).list(
+            workspace=str(repo_root),
+            type="decision",
+        )
+        assert len(decisions) >= 1, (
+            "expected at least one decision captured by /approve, got "
+            f"{len(decisions)}"
+        )
+        # And the related_task should match the smoke-test task id.
+        assert any(d["related_task"] == task.id for d in decisions), (
+            "expected decision related to the smoke test's task id, "
+            f"got related_tasks={[d['related_task'] for d in decisions]}"
         )
 
         proc = subprocess.run(

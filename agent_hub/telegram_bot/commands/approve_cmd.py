@@ -73,6 +73,23 @@ async def handle_approve(
     except InvalidTransition as exc:
         return f"Approved the gate but couldn't advance status: {exc}"
 
+    # Capture the design as a decision-log entry.
+    from agent_hub.memory.capture import on_design_approved
+
+    arch_text = await repo.latest_comment_by(task_id, "architect")
+    quant_text = await repo.latest_comment_by(task_id, "quant") if not arch_text else None
+    design_text = arch_text or quant_text or ""
+    if design_text:
+        captured_agent = "architect" if arch_text else "quant"
+        await on_design_approved(
+            db_path=db_path,
+            workspace=str(repo_root) if repo_root else None,
+            task_id=task_id,
+            task_title=task.title,
+            design_text=design_text,
+            agent_name=captured_agent,
+        )
+
     # If we don't have the workspace info, stop here. Tests use this path.
     if repo_root is None or worktrees_root is None:
         return f"✅ Task #{task_id} approved — moving to ready."

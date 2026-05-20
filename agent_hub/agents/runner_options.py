@@ -14,7 +14,11 @@ from typing import Any
 from agent_hub.agents.registry import AgentRole
 
 
-def build_mcp_server_config(db_path: Path) -> dict[str, Any]:
+def build_mcp_server_config(
+    db_path: Path,
+    cwd: Path | None = None,
+    agent_name: str | None = None,
+) -> dict[str, Any]:
     """The stdio launch spec passed to ClaudeAgentOptions.mcp_servers.
 
     Keyed under "agent_hub" so MCP tool names land in the
@@ -29,26 +33,38 @@ def build_mcp_server_config(db_path: Path) -> dict[str, Any]:
     `agent_hub` isn't on sys.path unless we add the project root. We
     derive the root from this file's location (.../agent_hub/agents/
     runner_options.py) — parents[2] is the repo root.
+
+    `cwd`: when provided, sets AGENT_HUB_WORKSPACE in the subprocess env
+    so the memory.note MCP tool knows which workspace to scope facts to.
+
+    `agent_name`: when provided, sets AGENT_HUB_AGENT_NAME in the subprocess
+    env so tasks.comment can record the correct actor instead of the generic
+    "agent" fallback.
     """
     project_root = Path(__file__).resolve().parents[2]
     existing_pp = os.environ.get("PYTHONPATH", "")
     python_path = (
         f"{project_root}{os.pathsep}{existing_pp}" if existing_pp else str(project_root)
     )
+    env: dict[str, str] = {
+        **os.environ,
+        "AGENT_HUB_DB": str(db_path),
+        "PYTHONPATH": python_path,
+    }
+    if cwd is not None:
+        env["AGENT_HUB_WORKSPACE"] = str(cwd)
+    if agent_name is not None:
+        env["AGENT_HUB_AGENT_NAME"] = agent_name
     return {
         "agent_hub": {
             "command": sys.executable,
             "args": ["-m", "agent_hub.mcp_server"],
-            "env": {
-                **os.environ,
-                "AGENT_HUB_DB": str(db_path),
-                "PYTHONPATH": python_path,
-            },
+            "env": env,
         },
     }
 
 
-def build_sdk_options(
+async def build_sdk_options(
     role: AgentRole,
     *,
     cwd: Path | None,
@@ -57,16 +73,25 @@ def build_sdk_options(
 ) -> Any:
     """Construct a ClaudeAgentOptions for the given role + workspace.
 
+    If `cwd` is set, loads project memory for that workspace+role and
+    appends a `## Project memory` section to the role's system prompt.
+
     `session_id` (when set) pins the conversation to a known UUID so a
     later reconnect can pick up where it left off — the Claude Code CLI
     persists conversation history per session_id. Pass the value
     returned by AgentSessionStore.get_or_create.
-
-    Returns the SDK's options object (whose exact class lives in
-    claude_agent_sdk). Keeping the SDK import lazy here so test-time
-    import of this module is cheap.
     """
     import claude_agent_sdk as sdk
+
+    system_prompt = role.system_prompt
+    if cwd is not None:
+        from agent_hub.memory.store import MemoryStore
+
+        memory_section = await MemoryStore(db_path).load_for_prompt(
+            workspace=str(cwd), agent_name=role.name,
+        )
+        if memory_section:
+            system_prompt = f"{system_prompt}\n\n{memory_section}"
 
     # Isolation: the SDK is designed for Claude Code, so by default it
     # exposes Claude Code's full toolset AND loads the user's CLAUDE.md /
@@ -85,14 +110,14 @@ def build_sdk_options(
     #                              permission gating.
     builtin_tools = [t for t in role.allowed_tools if not t.startswith("mcp__")]
     kwargs: dict[str, Any] = {
-        "system_prompt": role.system_prompt,
+        "system_prompt": system_prompt,
         "tools": builtin_tools,
         "allowed_tools": role.allowed_tools,
         "setting_sources": [],
         "skills": [],
         "model": role.model,
         "cwd": str(cwd) if cwd else None,
-        "mcp_servers": build_mcp_server_config(db_path),
+        "mcp_servers": build_mcp_server_config(db_path, cwd=cwd, agent_name=role.name),
     }
     if session_id is not None:
         kwargs["session_id"] = session_id

@@ -315,6 +315,18 @@ class Orchestrator:
         if row is None:
             return
 
+        # Capture kickback lessons before dispatching the agent turn.
+        from agent_hub.memory.capture import on_handoff_kickback
+        workspace = str(self.runner.workspace) if self.runner.workspace else None
+        await on_handoff_kickback(
+            db_path=self.db.path,
+            workspace=workspace,
+            task_id=row.task_id,
+            from_agent=row.from_agent,
+            to_agent=row.to_agent,
+            message=row.message,
+        )
+
         # Look up origin_chat_id so we know where to stream the response.
         repo = TaskRepository(self.db.path)
         task = await repo.get(row.task_id)

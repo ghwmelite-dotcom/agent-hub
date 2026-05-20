@@ -156,3 +156,54 @@ async def test_foreign_keys_enforced(temp_db_path):
                 (999, "2026-05-17T00:00:00Z", "test", "comment", "{}"),
             )
             await conn.commit()
+
+
+@pytest.mark.asyncio
+async def test_project_memory_table_exists(temp_db_path):
+    from agent_hub.db import Database
+    db = Database(temp_db_path)
+    await db.init()
+    import aiosqlite
+    async with aiosqlite.connect(temp_db_path) as conn:
+        cur = await conn.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type='table' AND name='project_memory'"
+        )
+        row = await cur.fetchone()
+    assert row is not None
+
+
+@pytest.mark.asyncio
+async def test_project_memory_has_expected_columns(temp_db_path):
+    from agent_hub.db import Database
+    db = Database(temp_db_path)
+    await db.init()
+    import aiosqlite
+    async with aiosqlite.connect(temp_db_path) as conn:
+        cur = await conn.execute("PRAGMA table_info(project_memory)")
+        cols = {r[1] for r in await cur.fetchall()}
+    assert cols == {
+        "id", "workspace", "type", "agent_source", "title", "body",
+        "related_task", "created_at", "last_used_at", "use_count", "archived",
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_sessions_has_memory_fingerprint(temp_db_path):
+    from agent_hub.db import Database
+    db = Database(temp_db_path)
+    await db.init()
+    import aiosqlite
+    async with aiosqlite.connect(temp_db_path) as conn:
+        cur = await conn.execute("PRAGMA table_info(agent_sessions)")
+        cols = {r[1] for r in await cur.fetchall()}
+    assert "memory_fingerprint" in cols
+
+
+@pytest.mark.asyncio
+async def test_db_init_is_idempotent(temp_db_path):
+    """Re-running init on an existing DB must not raise."""
+    from agent_hub.db import Database
+    db = Database(temp_db_path)
+    await db.init()
+    await db.init()  # second time — must be safe

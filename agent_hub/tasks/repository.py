@@ -165,6 +165,30 @@ class TaskRepository:
     async def comment(self, task_id: int, *, actor: str, body: str) -> int:
         return await self._append_event(task_id, actor=actor, kind="comment", payload={"body": body})
 
+    async def latest_comment_by(
+        self, task_id: int, actor: str,
+    ) -> str | None:
+        """Return the most recent comment body where the actor matches.
+
+        Used by the memory capture hook to grab the architect/quant
+        design text at /approve time.
+        """
+        async with self._connect() as conn:
+            conn.row_factory = aiosqlite.Row
+            cur = await conn.execute(
+                "SELECT payload_json FROM task_events "
+                "WHERE task_id = ? AND actor = ? AND kind = 'comment' "
+                "ORDER BY id DESC LIMIT 1",
+                (task_id, actor),
+            )
+            row = await cur.fetchone()
+        if row is None:
+            return None
+        try:
+            return json.loads(row["payload_json"]).get("body")
+        except (ValueError, TypeError):
+            return None
+
     async def events(self, task_id: int, *, limit: int | None = None) -> list:
         """Returns TaskEvent list ordered by ts ASC. If limit, returns the *most recent* `limit`."""
         from agent_hub.tasks.models import TaskEvent

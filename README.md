@@ -178,6 +178,12 @@ In Telegram, find your bot, send `/start`. The PM will greet you.
 - `/budget [amount|off]` — view, set, or disable the cumulative spend cap
 - `/help` — list all commands
 
+**Memory** (project-scoped, shared across agents)
+- `/memory [facts|lessons|preferences|decisions]` — list project memory for the current workspace
+- `/memory clear [confirm]` — archive all memory for the current workspace
+- `/remember <text>` — save a preference for the current workspace
+- `/forget <id>` — archive a memory entry by id
+
 ## Budget control
 
 By default there's no cap and you pay for whatever the agents consume. Set one:
@@ -201,6 +207,13 @@ Check current spend any time with `/status` or `/budget`.
 - The bot only responds to `TELEGRAM_ALLOWED_USER_ID`.
 - Direct commits on `main` are not the workflow — every task gets its own
   `task/<id>-<slug>` branch in an isolated worktree.
+
+## Keeping the laptop from sleeping mid-task
+
+Windows sleep pauses the bot entirely — see `docs/superpowers/runbooks/keep-bot-awake.md`
+for the two-option setup (PowerToys Awake for on-demand override, or a
+lid-close power config that lets the bot run while plugged in with the
+lid closed).
 
 ## Surviving restart
 
@@ -231,7 +244,8 @@ agent-hub/
 │   │   ├── runner_options.py         # ClaudeAgentOptions builder
 │   │   └── session_store.py          # (agent, task_id) → session_id persistence
 │   ├── mcp_server/                   # MCP tools the agents call
-│   │   └── tools/                    #   tasks.* handoff gate.* worktree.*
+│   │   └── tools/                    #   tasks.* handoff gate.* worktree.* memory.note
+│   ├── memory/                       # Project-scoped shared memory + capture hooks
 │   ├── orchestrator/                 # Routing + tick loops + push
 │   ├── telegram_bot/                 # Telegram frontend + command handlers
 │   └── tasks/                        # Repositories (tasks, gates, handoffs, worktrees)

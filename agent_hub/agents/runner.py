@@ -217,16 +217,32 @@ class AgentRunner:
             if effective_cwd is None:
                 effective_cwd = self._cwd
 
-            # Persistent (agent, task_id) → SDK session UUID. On the first
-            # creation this writes a new UUID; on subsequent creations
-            # (after a process restart) it returns the existing UUID so
-            # the CLI re-loads the prior conversation history.
+            # Fingerprint-based session refresh: if memory has changed
+            # since this session was last attached, drop the session UUID
+            # so the SDK rebuilds the system prompt with current memory.
+            from agent_hub.memory.store import MemoryStore
             session_store = AgentSessionStore(self.settings.database_path)
+            if effective_cwd is not None:
+                current_fp = await MemoryStore(self.settings.database_path).fingerprint(
+                    workspace=str(effective_cwd), agent_name=role.name,
+                )
+                stored_fp = await session_store.get_fingerprint(
+                    agent_name=role.name, task_id=task_id,
+                )
+                if stored_fp is not None and stored_fp != current_fp:
+                    await session_store.forget(
+                        agent_name=role.name, task_id=task_id,
+                    )
+                await session_store.set_fingerprint(
+                    agent_name=role.name, task_id=task_id,
+                    fingerprint=current_fp,
+                )
+
             session_id = await session_store.get_or_create(
                 agent_name=role.name, task_id=task_id,
             )
 
-            options = build_sdk_options(
+            options = await build_sdk_options(
                 role,
                 cwd=effective_cwd,
                 db_path=self.settings.database_path,

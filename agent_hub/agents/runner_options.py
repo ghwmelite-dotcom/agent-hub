@@ -14,7 +14,11 @@ from typing import Any
 from agent_hub.agents.registry import AgentRole
 
 
-def build_mcp_server_config(db_path: Path, cwd: Path | None = None) -> dict[str, Any]:
+def build_mcp_server_config(
+    db_path: Path,
+    cwd: Path | None = None,
+    agent_name: str | None = None,
+) -> dict[str, Any]:
     """The stdio launch spec passed to ClaudeAgentOptions.mcp_servers.
 
     Keyed under "agent_hub" so MCP tool names land in the
@@ -32,6 +36,10 @@ def build_mcp_server_config(db_path: Path, cwd: Path | None = None) -> dict[str,
 
     `cwd`: when provided, sets AGENT_HUB_WORKSPACE in the subprocess env
     so the memory.note MCP tool knows which workspace to scope facts to.
+
+    `agent_name`: when provided, sets AGENT_HUB_AGENT_NAME in the subprocess
+    env so tasks.comment can record the correct actor instead of the generic
+    "agent" fallback.
     """
     project_root = Path(__file__).resolve().parents[2]
     existing_pp = os.environ.get("PYTHONPATH", "")
@@ -45,6 +53,8 @@ def build_mcp_server_config(db_path: Path, cwd: Path | None = None) -> dict[str,
     }
     if cwd is not None:
         env["AGENT_HUB_WORKSPACE"] = str(cwd)
+    if agent_name is not None:
+        env["AGENT_HUB_AGENT_NAME"] = agent_name
     return {
         "agent_hub": {
             "command": sys.executable,
@@ -107,7 +117,7 @@ async def build_sdk_options(
         "skills": [],
         "model": role.model,
         "cwd": str(cwd) if cwd else None,
-        "mcp_servers": build_mcp_server_config(db_path, cwd=cwd),
+        "mcp_servers": build_mcp_server_config(db_path, cwd=cwd, agent_name=role.name),
     }
     if session_id is not None:
         kwargs["session_id"] = session_id

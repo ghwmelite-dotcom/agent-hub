@@ -130,3 +130,77 @@ async def test_tasks_comment_unknown_task_returns_error(server_and_db):
     comment = _tool(server, "tasks.comment")
     result = await comment(task_id=99999, body="hi")
     assert isinstance(result, dict) and "error" in result
+
+
+@pytest.mark.asyncio
+async def test_tasks_comment_uses_agent_name_from_env(temp_db_path, monkeypatch):
+    """When AGENT_HUB_AGENT_NAME is set, tasks.comment uses it as the actor."""
+    from agent_hub.db import Database
+    from agent_hub.tasks.repository import TaskRepository
+
+    db = Database(temp_db_path)
+    await db.init()
+    server = FastMCP("test")
+    register(server, temp_db_path)
+
+    monkeypatch.setenv("AGENT_HUB_AGENT_NAME", "architect")
+
+    create = _tool(server, "tasks.create")
+    comment = _tool(server, "tasks.comment")
+    get = _tool(server, "tasks.get")
+
+    t = await create(title="design task", description="d", origin_chat_id=1)
+    await comment(task_id=t["id"], body="Here is the design doc.")
+
+    detail = await get(task_id=t["id"])
+    last_event = detail["recent_events"][-1]
+    assert last_event["actor"] == "architect"
+    assert last_event["payload"]["body"] == "Here is the design doc."
+
+
+@pytest.mark.asyncio
+async def test_tasks_comment_explicit_actor_overrides_env(temp_db_path, monkeypatch):
+    """Explicit actor= argument wins over the env var."""
+    from agent_hub.db import Database
+
+    db = Database(temp_db_path)
+    await db.init()
+    server = FastMCP("test")
+    register(server, temp_db_path)
+
+    monkeypatch.setenv("AGENT_HUB_AGENT_NAME", "architect")
+
+    create = _tool(server, "tasks.create")
+    comment = _tool(server, "tasks.comment")
+    get = _tool(server, "tasks.get")
+
+    t = await create(title="override task", description="d", origin_chat_id=1)
+    await comment(task_id=t["id"], body="reviewer note", actor="reviewer")
+
+    detail = await get(task_id=t["id"])
+    last_event = detail["recent_events"][-1]
+    assert last_event["actor"] == "reviewer"
+
+
+@pytest.mark.asyncio
+async def test_tasks_comment_falls_back_to_agent_when_no_env(temp_db_path, monkeypatch):
+    """Without AGENT_HUB_AGENT_NAME and no explicit actor, falls back to 'agent'."""
+    from agent_hub.db import Database
+
+    db = Database(temp_db_path)
+    await db.init()
+    server = FastMCP("test")
+    register(server, temp_db_path)
+
+    monkeypatch.delenv("AGENT_HUB_AGENT_NAME", raising=False)
+
+    create = _tool(server, "tasks.create")
+    comment = _tool(server, "tasks.comment")
+    get = _tool(server, "tasks.get")
+
+    t = await create(title="fallback task", description="d", origin_chat_id=1)
+    await comment(task_id=t["id"], body="some note")
+
+    detail = await get(task_id=t["id"])
+    last_event = detail["recent_events"][-1]
+    assert last_event["actor"] == "agent"

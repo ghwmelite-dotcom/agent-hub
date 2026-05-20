@@ -10,6 +10,7 @@ italic tool-call lines, prose treated as MarkdownV2 source.
 
 from __future__ import annotations
 
+import re
 from pathlib import PurePath
 from typing import Any
 
@@ -122,3 +123,93 @@ def _humanize_mcp(tool: str, args: dict[str, Any]) -> str | None:
 
     # Soft fallback: strip prefix, replace _ with ., lowercase.
     return suffix.replace("_", ".").lower()
+
+
+# ---------- MarkdownV2 prose tokenizer ----------
+
+# Ordered patterns — match the LONGEST/most-specific markers first.
+# Each pattern's group is the whole token including its markers.
+_TOKEN_RE = re.compile(
+    r"(```[\s\S]*?```)"               # fenced code block (multiline)
+    r"|(`[^`\n]+`)"                   # inline code
+    r"|(\*\*[^*\n]+\*\*)"             # github bold
+    r"|(\*[^*\n]+\*)"                 # markdownv2 bold
+    r"|(__[^_\n]+__)"                 # github italic
+    r"|(_[^_\n]+_)"                   # markdownv2 italic
+    r"|(\|\|[^|\n]+\|\|)"             # spoiler
+    r"|(\[[^\]\n]+\]\([^)\n]+\))"     # link
+)
+
+
+def _escape_in_code(text: str) -> str:
+    """Inside ` … ` / ``` … ``` only ` and \\ need escaping."""
+    return text.replace("\\", "\\\\").replace("`", "\\`")
+
+
+def _render_token(token: str) -> str:
+    """Given a matched markdown token, return its MarkdownV2 form."""
+    # Fenced code block
+    if token.startswith("```"):
+        inner = token[3:-3]
+        return "```" + _escape_in_code(inner) + "```"
+    # Inline code
+    if token.startswith("`"):
+        inner = token[1:-1]
+        return "`" + _escape_in_code(inner) + "`"
+    # GitHub bold → MarkdownV2 bold
+    if token.startswith("**"):
+        inner = token[2:-2]
+        return "*" + escape(inner) + "*"
+    # MarkdownV2 bold (already single-*)
+    if token.startswith("*"):
+        inner = token[1:-1]
+        return "*" + escape(inner) + "*"
+    # GitHub italic
+    if token.startswith("__"):
+        inner = token[2:-2]
+        return "_" + escape(inner) + "_"
+    # MarkdownV2 italic
+    if token.startswith("_"):
+        inner = token[1:-1]
+        return "_" + escape(inner) + "_"
+    # Spoiler
+    if token.startswith("||"):
+        inner = token[2:-2]
+        return "||" + escape(inner) + "||"
+    # Link [label](url)
+    if token.startswith("["):
+        m = re.match(r"^\[([^\]]+)\]\(([^)]+)\)$", token)
+        if m:
+            label, url = m.group(1), m.group(2)
+            return f"[{escape(label)}]({url})"
+    # Shouldn't reach — fall back to escaping the whole thing as plain.
+    return escape(token)
+
+
+def to_markdownv2(prose: str) -> str:
+    """Convert agent prose into MarkdownV2-safe text.
+
+    1. Tokenize using `_TOKEN_RE` to find inline-code, fenced code,
+       bold, italic, spoiler, and link markers.
+    2. Translate GitHub-style **bold** / __italic__ into MarkdownV2's
+       *bold* / _italic_.
+    3. Escape every reserved character in plain segments and in the
+       inner text of formatted segments (except code, which only
+       needs ` and \\ escaped).
+
+    Unmatched markers fall through to the plain-segment escape path
+    (so a lone backtick gets escaped, not dropped).
+    """
+    out: list[str] = []
+    last = 0
+    for m in _TOKEN_RE.finditer(prose):
+        # Plain text between previous token and this one
+        if m.start() > last:
+            out.append(escape(prose[last:m.start()]))
+        token = m.group(0)
+        out.append(_render_token(token))
+        last = m.end()
+    # Trailing plain text after the last token
+    if last < len(prose):
+        out.append(escape(prose[last:]))
+    return "".join(out)

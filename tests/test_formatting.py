@@ -114,3 +114,78 @@ def test_humanize_truncates_long_detail():
     # The detail portion (everything after the label) must fit in quote + 60 + ellipsis + quote.
     detail = out[len("Create task "):]
     assert len(detail) <= 63  # opening quote + 60 chars + ellipsis + closing quote
+
+
+# ===== Task 3: to_markdownv2() =====
+
+from agent_hub.telegram_bot.formatting import to_markdownv2
+
+
+def test_to_markdownv2_escapes_plain_text():
+    assert to_markdownv2("Done. Tests pass!") == "Done\\. Tests pass\\!"
+
+
+def test_to_markdownv2_preserves_inline_code():
+    out = to_markdownv2("The `foo.bar` function exists.")
+    # Text outside the code span gets escaped, code span survives intact.
+    assert "`foo.bar`" in out
+    assert "function exists\\." in out
+
+
+def test_to_markdownv2_preserves_fenced_code_block():
+    src = "before\n```python\nprint('hi.')\n```\nafter."
+    out = to_markdownv2(src)
+    # The code-block contents survive unescaped (only ` and \\ need escaping inside).
+    assert "```python\nprint('hi.')\n```" in out
+    assert "before" in out
+    assert "after\\." in out
+
+
+def test_to_markdownv2_translates_github_bold():
+    """`**bold**` becomes `*bold*` (MarkdownV2 single-asterisk bold)."""
+    out = to_markdownv2("This is **important** text.")
+    assert "*important*" in out
+    assert "**" not in out
+
+
+def test_to_markdownv2_translates_github_italic():
+    out = to_markdownv2("Slightly __emphasis__ here.")
+    assert "_emphasis_" in out
+    assert "__" not in out
+
+
+def test_to_markdownv2_preserves_native_bold():
+    """A MarkdownV2-style `*bold*` is left as-is."""
+    out = to_markdownv2("Already *bold* here.")
+    assert "*bold*" in out
+
+
+def test_to_markdownv2_preserves_native_italic():
+    out = to_markdownv2("Already _italic_ here.")
+    assert "_italic_" in out
+
+
+def test_to_markdownv2_preserves_spoiler():
+    out = to_markdownv2("Hidden ||spoiler|| here.")
+    assert "||spoiler||" in out
+
+
+def test_to_markdownv2_preserves_link():
+    out = to_markdownv2("See [docs](https://example.com) for details.")
+    assert "[docs](https://example.com)" in out
+
+
+def test_to_markdownv2_unbalanced_markers_fall_through_as_plain():
+    """A lone backtick or asterisk gets escaped, not silently dropped."""
+    out = to_markdownv2("a `b c")
+    # No closing backtick → treat the backtick as plain → must be escaped.
+    assert "\\`" in out
+
+
+def test_to_markdownv2_mixed_content():
+    """Prose with one code span, one bold, one plain sentence."""
+    src = "Check `s.isSlowEffective()` not **s.isSlow**. Done."
+    out = to_markdownv2(src)
+    assert "`s.isSlowEffective()`" in out
+    assert "*s\\.isSlow*" in out
+    assert "Done\\." in out

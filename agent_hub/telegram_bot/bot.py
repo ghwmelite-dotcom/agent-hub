@@ -5,10 +5,11 @@ from __future__ import annotations
 from pathlib import Path
 
 import structlog
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     ApplicationBuilder,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -272,6 +273,29 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     chat_id = update.effective_chat.id
     text = update.message.text
 
+    # ------------------------------------------------------------------
+    # Preference candidate detection — offer inline Save/Skip before
+    # handing the message to the PM.
+    # ------------------------------------------------------------------
+    from agent_hub.memory.preferences import looks_like_preference
+
+    if looks_like_preference(text):
+        workspace = (
+            str(orch.runner.workspace) if orch.runner.workspace else None
+        )
+        if workspace:
+            kb = InlineKeyboardMarkup([[
+                InlineKeyboardButton("💾 Save preference", callback_data="memory_save"),
+                InlineKeyboardButton("Skip", callback_data="memory_skip"),
+            ]])
+            pending: dict[int, tuple[str, str]] = (
+                context.application.bot_data.setdefault("pending_preferences", {})
+            )
+            pending[update.message.message_id] = (workspace, text)
+            await update.message.reply_text(
+                "💡 Save as project preference?", reply_markup=kb,
+            )
+
     # Show "typing…" while we work.
     await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
@@ -298,6 +322,37 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             chat_id=chat_id,
             text=f"Sorry — something broke handling that message:\n`{exc}`",
         )
+
+
+async def _on_memory_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle memory_save / memory_skip callback queries from the inline keyboard."""
+    from agent_hub.memory.capture import on_user_preference_save
+
+    settings: Settings = context.application.bot_data["settings"]
+    query = update.callback_query
+    await query.answer()
+
+    reply_to = query.message.reply_to_message
+    key = reply_to.message_id if reply_to else None
+    pending: dict[int, tuple[str, str]] = context.application.bot_data.get(
+        "pending_preferences", {}
+    )
+    candidate = pending.pop(key, None) if key is not None else None
+
+    if candidate is None:
+        await query.edit_message_text("(candidate expired)")
+        return
+
+    workspace, text = candidate
+    if query.data == "memory_save":
+        await on_user_preference_save(
+            db_path=settings.database_path,
+            workspace=workspace,
+            body=text,
+        )
+        await query.edit_message_text("✅ Saved as preference.")
+    else:
+        await query.edit_message_text("Skipped.")
 
 
 async def _render_event(stream: StreamingMessage, event: AgentEvent) -> None:
@@ -359,6 +414,7 @@ def build_application(
 
     app.bot_data["settings"] = settings
     app.bot_data["orchestrator"] = orchestrator
+    app.bot_data["pending_preferences"] = {}  # message_id → (workspace, text)
 
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
@@ -493,6 +549,11 @@ def build_application(
     app.add_handler(CommandHandler("resume", _on_resume))
     app.add_handler(CommandHandler("status", _on_status))
     app.add_handler(CommandHandler("budget", _on_budget))
+
+    # Memory inline-keyboard callback — must come before the catch-all text handler
+    app.add_handler(
+        CallbackQueryHandler(_on_memory_callback, pattern=r"^memory_(save|skip)$")
+    )
 
     # Catch-all — must come AFTER all CommandHandlers
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_message))

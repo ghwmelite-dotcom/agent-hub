@@ -183,3 +183,29 @@ async def test_normal_forward_handoff_does_not_capture(db_path):
         workspace=r"C:\dev\foo", type="lesson",
     )
     assert rows == []
+
+
+@pytest.mark.asyncio
+async def test_on_user_preference_save_writes_preference(db_path):
+    from agent_hub.memory.capture import on_user_preference_save
+    new_id = await on_user_preference_save(
+        db_path=db_path,
+        workspace=r"C:\dev\foo",
+        body="don't add code comments",
+    )
+    assert new_id is not None
+    rows = await MemoryStore(db_path).list(
+        workspace=r"C:\dev\foo", type="preference",
+    )
+    assert len(rows) == 1
+    assert rows[0]["body"] == "don't add code comments"
+    assert rows[0]["agent_source"] == "user"
+
+
+@pytest.mark.asyncio
+async def test_on_user_preference_save_no_workspace_returns_none(db_path):
+    from agent_hub.memory.capture import on_user_preference_save
+    result = await on_user_preference_save(
+        db_path=db_path, workspace=None, body="don't squash",
+    )
+    assert result is None

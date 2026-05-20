@@ -81,6 +81,28 @@ _KICKBACK_PAIRS = {
 }
 
 
+async def on_user_preference_save(
+    *,
+    db_path: Path,
+    workspace: str | None,
+    body: str,
+) -> int | None:
+    """Save a user-confirmed preference. Returns the new row id, or None."""
+    if not workspace:
+        return None
+    try:
+        return await MemoryStore(db_path).insert(
+            workspace=workspace,
+            type="preference",
+            agent_source="user",
+            title=body[:80],
+            body=body,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("memory.capture.on_user_preference_save.failed")
+        return None
+
+
 async def on_handoff_kickback(
     *,
     db_path: Path,

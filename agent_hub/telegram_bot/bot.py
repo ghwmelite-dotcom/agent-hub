@@ -105,6 +105,11 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "/resume <id> — resume a stale/blocked task\n"
         "/status — orchestrator health snapshot\n"
         "/budget [amount|off] — view, set, or disable the spend cap\n\n"
+        "*Memory*\n"
+        "/memory [facts|lessons|preferences|decisions] — list project memory\n"
+        "/memory clear [confirm] — archive all memory for current workspace\n"
+        "/remember <text> — save a preference for the current workspace\n"
+        "/forget <id> — archive a memory entry by id\n\n"
         "Address an agent directly with `@name` (e.g. `@architect`, `@impl`)."
     )
 
@@ -436,6 +441,12 @@ def build_application(
     from agent_hub.telegram_bot.commands.tasks_cmd import handle_tasks
     from agent_hub.telegram_bot.commands.task_cmd import handle_task
     from agent_hub.telegram_bot.commands.resume_cmd import handle_resume
+    from agent_hub.telegram_bot.commands.memory_cmd import (
+        handle_memory_list,
+        handle_memory_clear,
+        handle_forget,
+        handle_remember,
+    )
 
     db_path = settings.database_path
 
@@ -541,6 +552,48 @@ def build_application(
         reply = await handle_resume(task_id=task_id, db_path=db_path)
         await update.effective_chat.send_message(reply)
 
+    async def _on_memory(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        args = context.args or []
+        workspace = str(orchestrator.runner.workspace) if orchestrator.runner.workspace else None
+        if args and args[0].lower() == "clear":
+            confirm = len(args) > 1 and args[1].lower() == "confirm"
+            reply = await handle_memory_clear(
+                db_path=db_path, workspace=workspace, confirm=confirm,
+            )
+        else:
+            type_filter = args[0].lower() if args else None
+            reply = await handle_memory_list(
+                db_path=db_path, workspace=workspace, type_filter=type_filter,
+            )
+        await update.effective_chat.send_message(reply)
+
+    async def _on_forget(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        if not context.args:
+            await update.effective_chat.send_message("Usage: /forget <id>")
+            return
+        try:
+            entry_id = int(context.args[0])
+        except ValueError:
+            await update.effective_chat.send_message("Entry id must be an integer.")
+            return
+        workspace = str(orchestrator.runner.workspace) if orchestrator.runner.workspace else None
+        reply = await handle_forget(
+            db_path=db_path, entry_id=entry_id, workspace=workspace,
+        )
+        await update.effective_chat.send_message(reply)
+
+    async def _on_remember(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        args = context.args or []
+        if not args:
+            await update.effective_chat.send_message("Usage: /remember <preference text>")
+            return
+        text = " ".join(args)
+        workspace = str(orchestrator.runner.workspace) if orchestrator.runner.workspace else None
+        reply = await handle_remember(
+            db_path=db_path, workspace=workspace, text=text,
+        )
+        await update.effective_chat.send_message(reply)
+
     app.add_handler(CommandHandler("tasks", _on_tasks))
     app.add_handler(CommandHandler("task", _on_task))
     app.add_handler(CommandHandler("approve", _on_approve))
@@ -549,6 +602,9 @@ def build_application(
     app.add_handler(CommandHandler("resume", _on_resume))
     app.add_handler(CommandHandler("status", _on_status))
     app.add_handler(CommandHandler("budget", _on_budget))
+    app.add_handler(CommandHandler("memory", _on_memory))
+    app.add_handler(CommandHandler("forget", _on_forget))
+    app.add_handler(CommandHandler("remember", _on_remember))
 
     # Memory inline-keyboard callback — must come before the catch-all text handler
     app.add_handler(
